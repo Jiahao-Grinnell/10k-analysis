@@ -4,6 +4,20 @@ Source of truth for progress. Rules: AGENTS.md. Behavior: SPEC.md. Design: IMPLE
 
 Status flow: todo → in progress → ready for review → done (or blocked)
 
+## Decisions log
+
+- **2026-10-12 — scheduled tasks run in the cloud.**
+  - The final extraction (Codex or Claude scheduled tasks) cannot read this laptop's files, so clean files must be handed over to a location the cloud task can read, and results brought back.
+  - Proposed: batches pushed to a separate private GitHub repo, one branch per batch, results committed back as JSON, then the batch branch is deleted.
+  - Waiting for the user to confirm: (1) that clean filing text may leave the laptop (SEC filings are public); (2) the handoff location; (3) which cloud (Claude or Codex).
+  - This will become a task after TASK-08 (TASK-08b).
+- **2026-10-12 — TASK-09 (local models) stays in its place, but everything before it is designed for real models.** Concretely:
+  - Chunk size (TASK-06) must fit the tier-2 context per request: prompt + definitions + context + chunk within `ctx_per_slot` (planned 8k tokens), with room for the answer. Chunk token counts stay exact (o200k_base) and also allow a model-tokenizer margin.
+  - Segmentation, keep rules and compaction must not depend on which model is used. Only the classify stage and its outputs are keyed by model tag, so changing or comparing models reruns classify → compact → publish and never segmentation.
+  - The fake client and the real client keep the same interface (`complete`, `describe`, `tag`). Every rule built with the fake model (failures → UNCERTAIN, one filing per request, verbatim kept text) is enforced in stage code, not in the client.
+  - Reports and the monitor already keep results per model tag. TASK-07/08 must do the same (kept tokens and clean files per model), so results from several models can sit side by side.
+  - Timings are recorded per request (`requests.jsonl`), so throughput with real models can be measured from the same outputs.
+
 ## Protected throughout Iteration 1
 
 These must not change during any task:
