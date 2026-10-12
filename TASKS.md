@@ -128,7 +128,31 @@ The tasks below replace the earlier TASK-03 to TASK-08.
   - An edited manifest `sha256` causes a rerun of that filing only.
   - Development-corpus IDs and outputs are unchanged.
 - **Tests to add:** `test_scan.py` (new rows only, missing file, changed source, amendment link), timing recorded in the verification note.
-- **Status:** todo
+- **Status:** done (reviewed and approved by the user, 2026-10-12)
+- **Verification (2026-10-12):**
+  - `pytest -q`: 58 passed (7 new in `test_scan.py`; the existing tests moved to the DB registry).
+  - **Real corpus.** The old DB was migrated by the first scan (2,896 rows updated in about 5 s). Afterwards:
+
+    | Command | Result | Time |
+    |---|---|---|
+    | repeated `scan` | 0 new, 2,896 unchanged | 2.3 s (was 8.6 s via `discover()`) |
+    | `status` | — | 1.5 s |
+    | `segment --filing <Apple 2025>` | — | 1.9 s |
+
+    Python startup alone is about 0.8 s on this machine while it is busy. Another long-running Python process (anaconda env `dev`, not part of this project) was using CPU.
+  - **Development outputs unchanged:** `segment` on the full corpus reported 2,894 `already_done` and 2 source-incomplete, so filing IDs and outputs were untouched.
+  - **Rebuild:** `rebuild-index` (drop DB → scan → index conversions → re-index stage records) restored identical counts:
+    - convert: done 2,894, source_incomplete 2;
+    - segment: done 2,894, source_incomplete 2;
+    - classify [fake]: done 2.
+  - `convertmd.py` SHA-256 is unchanged.
+- **Decisions and notes:**
+  - **Fast rescans:** `scan` reads `10K_Filings/*/filings.csv` itself instead of `convertmd.discover()`, which resolves every path. It applies the same rules: listed statuses, paths must stay inside the raw folder, supported extensions, case-insensitive collisions. It uses the manifest `sha256` and hashes a file only when the manifest has none.
+  - **Changed raw files:** a raw file that changed after conversion is reported, not reconverted. `convert --reconvert-changed` rebuilds those Markdown files on request. This is the one exception to "never rewrite Markdown", and it runs only when the user asks.
+  - **Missing files:** a missing raw file is registered as `missing_source` and fails only itself. The next scan picks it up once the file exists.
+  - **`all` scans first;** other commands scan only if nothing is registered yet. A `--form` filter was added; `--company` also matches the CIK.
+  - **Faster startup:** stage modules are imported lazily, and `records.py` has its own `atomic_text` (same behaviour as convertmd's), so `status` and `scan` no longer load the converter.
+  - **Test timing:** the first test in a run that uses a temp folder spends 15–40 s in setup. That is pytest cleaning its temp folder on this busy machine, not pipeline code. A full run takes 1–2.5 min.
 
 ### TASK-04 — Monitor (Flask, read-only)
 - **Goal:** The user can watch long runs in the browser and inspect any filing's results, problems and token savings.

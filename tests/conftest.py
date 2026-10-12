@@ -1,9 +1,10 @@
+from contextlib import closing
 import csv
 from pathlib import Path
 
 import pytest
 
-from pipeline import config
+from pipeline import config, corpus, state
 
 HTML_10K = ('<html><body><p>PART I</p><p>Item 1. Business</p><p>Research costs were $12 million.</p>'
             + ''.join(f'<p>Paragraph {i}: the company sells widgets in region {i} and reports segment results.</p>'
@@ -25,18 +26,39 @@ class TinyTokenizer:
         return value.encode("utf-8")
 
 
+MANIFEST_FIELDS = ["company_id", "ticker", "cik", "report_year", "report_date", "filing_date", "form",
+                   "accession", "file", "sha256", "status"]
+
+
+def write_company(raw: Path, company: str, entries: dict[str, str], rows: dict[str, dict] | None = None) -> None:
+    """Write one company folder like the downloader does. rows: per-file manifest overrides."""
+    folder = raw / company
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder / "filings.csv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=MANIFEST_FIELDS)
+        writer.writeheader()
+        for name, content in entries.items():
+            if content is not None:
+                (folder / name).write_text(content, encoding="utf-8")
+            year = name[:4] if name[:4].isdigit() else "2000"
+            row = {"company_id": company.lower(), "ticker": company.split("_")[0], "cik": "0000000001",
+                   "report_year": year, "report_date": f"{year}-12-31", "filing_date": f"{int(year) + 1}-03-01",
+                   "form": "10-K", "accession": f"acc-{company}-{name}", "file": name, "sha256": "", "status": "downloaded"}
+            row.update((rows or {}).get(name, {}))
+            writer.writerow(row)
+
+
+def registered(cfg) -> dict:
+    """Scan the fixture corpus and return {filing_id: Filing}."""
+    with closing(state.connect(cfg.db_path)) as db:
+        corpus.scan(cfg, db, log=lambda *_: None)
+        return {f.filing_id: f for f in corpus.select(cfg, db)}
+
+
 def build_corpus(root: Path, files: dict[str, dict[str, str]]) -> config.Config:
     """files: {company_dir: {file name: content}}. Writes raw files, manifests and config.toml."""
     for company, entries in files.items():
-        folder = root / "raw" / company
-        folder.mkdir(parents=True)
-        with (folder / "filings.csv").open("w", encoding="utf-8", newline="") as stream:
-            writer = csv.DictWriter(stream, fieldnames=["company_id", "ticker", "report_year", "form", "file", "status"])
-            writer.writeheader()
-            for name, content in entries.items():
-                (folder / name).write_text(content, encoding="utf-8")
-                writer.writerow({"company_id": company.lower(), "ticker": company.split("_")[0],
-                                 "report_year": name[:4], "form": "10-K", "file": name, "status": "downloaded"})
+        write_company(root / "raw", company, entries)
     project = config.ROOT.as_posix()
     (root / "config.toml").write_text(
         '[paths]\nraw = "raw"\nmarkdown = "md"\noutputs = "outputs"\nruns = "runs"\n'

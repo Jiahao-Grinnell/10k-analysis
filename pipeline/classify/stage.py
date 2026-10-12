@@ -11,12 +11,11 @@ import json
 from pathlib import Path
 import time
 
-from convertmd import atomic_text
 from pipeline import state, tokens
 from pipeline.classify import prompt as prompts
 from pipeline.classify.client import ClientError
 from pipeline.classify.rules import KEPT, RULES_VERSION, InvalidResponse, decide, parse
-from pipeline.records import is_current, now, read_json, sha256_file, write_json, write_record
+from pipeline.records import atomic_text, is_current, now, read_json, sha256_file, write_json, write_record
 from pipeline.segment import stage as segment_stage
 from pipeline.segment.chunks import model_text
 
@@ -125,8 +124,7 @@ def run(cfg, db, filings: list, client, force: bool = False, run_id: int | None 
         started, clock = now(), time.perf_counter()
         segments, segment_record = segment_stage.paths(cfg, filing)
         if not segment_record.is_file() or read_json(segment_record).get("status") != "done":
-            audit = read_json(filing.audit_path) if filing.audit_path.is_file() else {}
-            incomplete = audit.get("quality_status") == "SOURCE_INCOMPLETE"
+            incomplete = filing.conversion_status == "SOURCE_INCOMPLETE"
             status = "source_incomplete" if incomplete else "waiting"
             state.set_stage(db, filing.filing_id, STAGE, status, model_tag=client.tag, started=started,
                             finished=now(), error="No usable Markdown" if incomplete else "Not segmented yet")

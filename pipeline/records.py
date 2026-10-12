@@ -9,9 +9,16 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 
-from convertmd import atomic_text
+
+def atomic_text(path: Path, value: str) -> None:
+    """Same behaviour as convertmd.atomic_text, without importing the converter."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + ".tmp")
+    temp.write_text(value, encoding="utf-8", newline="\n")
+    os.replace(temp, path)
 
 
 def now() -> str:

@@ -5,39 +5,59 @@ import argparse
 from contextlib import closing
 from pathlib import Path
 
-from pipeline import config, convert_stage, corpus, state
-from pipeline.classify import client as clients
-from pipeline.classify import stage as classify_stage
-from pipeline.segment import stage as segment_stage
+from pipeline import config, corpus, state
+
+# Stage modules (converter, HTTP client, tokenizer) load only in the commands that need them,
+# so `status` and `scan` start quickly.
 
 
 def _filters(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--filing", help="One filing ID, e.g. AAPL_Apple_Inc_CIK0000320193/2025_2025-10-31_0000320193-25-000079")
-    parser.add_argument("--company", help="Ticker, company folder or company_id")
+    parser.add_argument("--company", help="Ticker, company folder, company_id or CIK")
     parser.add_argument("--year", type=int, help="Report year")
+    parser.add_argument("--form", help="Form type, e.g. 10-K, 10-K405, 10-KSB, 10-K/A")
     parser.add_argument("--limit", type=int, help="Process at most N filings (after other filters)")
 
 
 def _args(args) -> dict:
-    """Command options for the runs table (without the cached filing list or handler)."""
+    """Command options for the runs table (without the handler)."""
     return {k: v for k, v in vars(args).items() if not k.startswith("_") and k != "func"}
 
 
 def _selected(cfg, args) -> list:
-    if getattr(args, "_filings", None) is None:  # discovery takes seconds; do it once per command
-        args._filings = corpus.list_filings(cfg.raw_dir, cfg.markdown_dir)
-    chosen = corpus.select(args._filings, args.filing, args.company, args.year, args.limit)
+    """Filings from the DB registry; scans 10K_Filings/ only if nothing is registered yet."""
+    with closing(state.connect(cfg.db_path)) as db:
+        if not corpus.registered_count(db):
+            print("No filings registered yet; scanning 10K_Filings/ first.", flush=True)
+            _print_scan(corpus.scan(cfg, db))
+        chosen = corpus.select(cfg, db, args.filing, args.company, args.year, args.form, args.limit)
     if not chosen:
         raise SystemExit("No filings match the given filters")
     return chosen
 
 
+def _print_scan(result: dict) -> None:
+    print(f"scan: {result['manifests']:,} manifests, {result['listed']:,} filings listed; {result['counts']}; "
+          f"amendments linked: {result['amendments_linked']}; missing source files: {result['missing_source']}; "
+          f"registered but no longer listed: {result['registered_but_no_longer_listed']}")
+
+
+def cmd_scan(cfg, args) -> int:
+    with closing(state.connect(cfg.db_path)) as db:
+        run_id = state.start_run(db, "scan", _args(args))
+        result = corpus.scan(cfg, db)
+        state.finish_run(db, run_id, 0)
+    _print_scan(result)
+    return 0
+
+
 def cmd_convert(cfg, args) -> int:
+    from pipeline import convert_stage
     filings = _selected(cfg, args)
     with closing(state.connect(cfg.db_path)) as db:
         run_id = state.start_run(db, "convert", _args(args))
         print(f"convert: {len(filings)} filings (existing Markdown is indexed, never rewritten)", flush=True)
-        result = convert_stage.run(cfg, db, filings)
+        result = convert_stage.run(cfg, db, filings, reconvert_changed=getattr(args, "reconvert_changed", False))
         code = 1 if result["errors"] else 0
         state.finish_run(db, run_id, code)
     _print_convert(result)
@@ -45,6 +65,7 @@ def cmd_convert(cfg, args) -> int:
 
 
 def cmd_segment(cfg, args) -> int:
+    from pipeline.segment import stage as segment_stage
     filings = _selected(cfg, args)
     with closing(state.connect(cfg.db_path)) as db:
         run_id = state.start_run(db, "segment", _args(args))
@@ -57,6 +78,7 @@ def cmd_segment(cfg, args) -> int:
 
 
 def cmd_classify(cfg, args, client=None) -> int:
+    from pipeline.classify import client as clients, stage as classify_stage
     filings = _selected(cfg, args)
     client = client or clients.from_config(cfg, fake=args.fake_model)
     with closing(state.connect(cfg.db_path)) as db:
@@ -74,19 +96,26 @@ def cmd_classify(cfg, args, client=None) -> int:
 
 
 def cmd_all(cfg, args) -> int:
+    from pipeline.classify import client as clients
     client = clients.from_config(cfg, fake=args.fake_model)  # fail early if no model is configured
+    cmd_scan(cfg, args)  # pick up filings added to 10K_Filings/ since the last scan
     codes = [cmd_convert(cfg, args), cmd_segment(cfg, args), cmd_classify(cfg, args, client)]
     return max(codes)
 
 
 def cmd_rebuild_index(cfg, args) -> int:
+    from pipeline import convert_stage
+    from pipeline.reindex import reindex_records
     for suffix in ("", "-wal", "-shm"):
         Path(str(cfg.db_path) + suffix).unlink(missing_ok=True)
-    filings = corpus.list_filings(cfg.raw_dir, cfg.markdown_dir)
     with closing(state.connect(cfg.db_path)) as db:
-        result = convert_stage.run(cfg, db, filings, convert_missing=False)
+        scanned = corpus.scan(cfg, db)
+        result = convert_stage.run(cfg, db, corpus.select(cfg, db), convert_missing=False)
+        records = reindex_records(cfg, db)
     print(f"Rebuilt {cfg.db_path} from files.")
+    _print_scan(scanned)
     _print_convert(result)
+    print(f"stage records re-indexed: {records}")
     return 0
 
 
@@ -102,10 +131,12 @@ def _print_convert(result: dict) -> None:
 def cmd_status(cfg, args) -> int:
     info = state.summary(cfg.db_path)
     if info is None:
-        print(f"No status database at {cfg.db_path}. Run `python -m pipeline convert` or `rebuild-index` first.")
+        print(f"No status database at {cfg.db_path}. Run `python -m pipeline scan` or `rebuild-index` first.")
         return 1
     print(f"Filings: {info['filings']:,}   converted: {info['converted']:,}   "
           f"Markdown tokens (o200k_base text tokens): {info['markdown_tokens']:,}")
+    print("Forms: " + ", ".join(f"{k} {v:,}" for k, v in info["forms"].items()))
+    print("Scan status: " + ", ".join(f"{k} {v:,}" for k, v in info["scan_status"].items()))
     print("Conversion status:")
     for status, n in info["conversion_status"].items():
         print(f"  {status}: {n:,}")
@@ -123,8 +154,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m pipeline", description=__doc__)
     parser.add_argument("--config", type=Path, default=config.DEFAULT_CONFIG)
     sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("scan", help="Register new filings from 10K_Filings/*/filings.csv").set_defaults(func=cmd_scan)
     convert = sub.add_parser("convert", help="Index existing Markdown; convert filings that have none")
     _filters(convert)
+    convert.add_argument("--reconvert-changed", action="store_true",
+                         help="Rebuild Markdown for filings whose raw file changed since conversion")
     convert.set_defaults(func=cmd_convert)
     segment = sub.add_parser("segment", help="Split Markdown into reading chunks")
     _filters(segment)

@@ -5,10 +5,9 @@ from collections import Counter
 import json
 from pathlib import Path
 
-from convertmd import atomic_text
 from pipeline import state, tokens
-from pipeline.convert_stage import CONVERTED
-from pipeline.records import is_current, now, read_json, sha256_file, write_json, write_record
+from pipeline.corpus import CONVERTED
+from pipeline.records import atomic_text, is_current, now, read_json, sha256_file, write_json, write_record
 from pipeline.segment.blocks import parse_blocks
 from pipeline.segment.chunks import build_chunks
 
@@ -49,11 +48,10 @@ def run(cfg, db, filings: list, force: bool = False, log=print) -> dict:
     for index, filing in enumerate(filings, 1):
         started = now()
         try:
-            audit = read_json(filing.audit_path) if filing.audit_path.is_file() else {}
-            if audit.get("quality_status") not in CONVERTED:
-                status = "source_incomplete" if audit.get("quality_status") == "SOURCE_INCOMPLETE" else "skipped"
+            if filing.conversion_status not in CONVERTED:
+                status = "source_incomplete" if filing.conversion_status == "SOURCE_INCOMPLETE" else "skipped"
                 state.set_stage(db, filing.filing_id, STAGE, status, started=started, finished=now(),
-                                error="No usable Markdown")
+                                error=f"No usable Markdown (conversion status {filing.conversion_status or 'none'})")
                 counts[status] += 1
                 continue
             output, record = paths(cfg, filing)

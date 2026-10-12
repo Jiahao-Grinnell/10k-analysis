@@ -5,8 +5,8 @@ import shutil
 
 import pytest
 
-from conftest import TinyTokenizer
-from pipeline import config, convert_stage, corpus, state
+from conftest import TinyTokenizer, registered
+from pipeline import config, convert_stage, state
 from pipeline.classify import stage as classify_stage
 from pipeline.classify.client import ClientError, FakeClient
 from pipeline.segment import stage as segment_stage
@@ -16,11 +16,13 @@ FILING = "AAA_Alpha_Inc/2020_a"
 
 
 def prepare(cfg):
-    filings = corpus.list_filings(cfg.raw_dir, cfg.markdown_dir)
     with closing(state.connect(cfg.db_path)) as db:
-        convert_stage.run(cfg, db, filings, tokenizers={"o200k_base": TinyTokenizer()}, log=lambda *_: None)
-        segment_stage.run(cfg, db, filings, log=lambda *_: None)
-    return {f.filing_id: f for f in filings}
+        convert_stage.run(cfg, db, list(registered(cfg).values()), tokenizers={"o200k_base": TinyTokenizer()},
+                          log=lambda *_: None)
+    filings = registered(cfg)  # re-read so conversion status is current
+    with closing(state.connect(cfg.db_path)) as db:
+        segment_stage.run(cfg, db, list(filings.values()), log=lambda *_: None)
+    return filings
 
 
 def classify(cfg, filings, client, **kwargs):

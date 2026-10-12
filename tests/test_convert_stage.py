@@ -1,13 +1,11 @@
 from contextlib import closing
 import os
 
-from conftest import TinyTokenizer
+from conftest import TinyTokenizer, registered
 from convertmd import conversion_job
-from pipeline import cli, convert_stage, corpus, state
+from pipeline import cli, convert_stage, state
 
-
-def filings_of(cfg):
-    return {f.filing_id: f for f in corpus.list_filings(cfg.raw_dir, cfg.markdown_dir)}
+filings_of = registered
 
 
 def run_convert(cfg):
@@ -83,4 +81,5 @@ def test_cli_convert_respects_filters(small_corpus):
     small_corpus.db_path.unlink()
     assert cli.main(["--config", str(small_corpus.path), "convert", "--company", "BBB"]) == 0
     info = state.summary(small_corpus.db_path)
-    assert info["filings"] == 1 and info["conversion_status"] == {"SOURCE_INCOMPLETE": 1}
+    # all three are registered by the automatic first scan; only BBB's filing was indexed
+    assert info["filings"] == 3 and info["conversion_status"] == {"NOT_CONVERTED": 2, "SOURCE_INCOMPLETE": 1}

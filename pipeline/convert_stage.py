@@ -1,7 +1,8 @@
 """Conversion stage: index existing Markdown_10K results; convert only filings with no output.
 
-convertmd.py is reused unchanged. An existing Markdown file is never rewritten:
-if it is damaged or incomplete, the filing is reported as failed for manual review.
+convertmd.py is reused unchanged. An existing Markdown file is never rewritten, except
+for a filing whose raw file changed, and only when the user asks (--reconvert-changed).
+A damaged or incomplete output is reported as failed for manual review.
 """
 from __future__ import annotations
 
@@ -12,10 +13,10 @@ from pathlib import Path
 
 from convertmd import conversion_job
 from pipeline import state, tokens
+from pipeline.corpus import CONVERTED
 from pipeline.records import now, read_json, sha256_file, write_json
 
 STAGE = "convert"
-CONVERTED = {"CHECKED_TEXT", "REVIEW_REQUIRED"}
 
 
 def _from_audit(filing, encoding: str) -> tuple[str, str | None, int | None, str | None]:
@@ -29,41 +30,68 @@ def _from_audit(filing, encoding: str) -> tuple[str, str | None, int | None, str
     return report.get("quality_status", "ERROR"), raw_format, markdown_tokens, None
 
 
-def run(cfg, db, filings: list, convert_missing: bool = True, tokenizers: dict | None = None,
-        log=print) -> dict:
-    """Index (and, if allowed, convert) each filing; record status in the database."""
+def _source_changed(filing) -> bool:
+    if filing.scan_status == "source_changed":
+        return True
+    audited = read_json(filing.audit_path).get("source_sha256")
+    return bool(filing.raw_sha256 and audited and audited != filing.raw_sha256)
+
+
+def run(cfg, db, filings: list, convert_missing: bool = True, reconvert_changed: bool = False,
+        tokenizers: dict | None = None, log=print) -> dict:
+    """Index (and, if allowed, convert) each filing; record status in the database.
+
+    Existing Markdown is rewritten only for a filing whose raw file changed, and only
+    when the user passes reconvert_changed.
+    """
     rows = []
+
+    def convert(filing):
+        nonlocal tokenizers
+        if tokenizers is None:
+            tokenizers = {cfg.encoding: tokens.encoding(cfg.encoding, str(cfg.tiktoken_cache))}
+        conversion_job(filing.raw_path, filing.markdown_path, tokenizers, filing.metadata)
+        db.execute("UPDATE filings SET scan_status='registered' WHERE filing_id=?", (filing.filing_id,))
+        return _from_audit(filing, next(iter(tokenizers)))
+
     for index, filing in enumerate(filings, 1):
         started = now()
         md_exists, audit_exists = filing.markdown_path.is_file(), filing.audit_path.is_file()
         try:
-            if md_exists and audit_exists:
-                status, raw_format, md_tokens, error = _from_audit(filing, cfg.encoding)
-                action = "indexed"
+            if filing.scan_status == "missing_source" or not filing.raw_path.is_file():
+                status, raw_format, md_tokens, action = "MISSING_SOURCE", None, None, "indexed"
+                error = "Raw file listed in filings.csv is missing"
+            elif md_exists and audit_exists:
+                if not _source_changed(filing):
+                    status, raw_format, md_tokens, error = _from_audit(filing, cfg.encoding)
+                    action = "indexed"
+                elif reconvert_changed:
+                    status, raw_format, md_tokens, error = convert(filing)
+                    action = "reconverted"
+                else:
+                    status, raw_format, md_tokens, action = "ERROR", None, None, "indexed"
+                    error = "Raw file changed since conversion; run `convert --reconvert-changed` to rebuild it"
             elif md_exists or audit_exists:
                 status, raw_format, md_tokens = "ERROR", None, None
                 error = "Partial conversion output (Markdown or audit missing); not rewritten"
                 action = "indexed"
             elif convert_missing:
-                if tokenizers is None:
-                    tokenizers = {cfg.encoding: tokens.encoding(cfg.encoding, str(cfg.tiktoken_cache))}
-                conversion_job(filing.raw_path, filing.markdown_path, tokenizers, filing.metadata)
-                status, raw_format, md_tokens, error = _from_audit(filing, next(iter(tokenizers)))
+                status, raw_format, md_tokens, error = convert(filing)
                 action = "converted"
             else:
                 status, raw_format, md_tokens, error, action = "MISSING", None, None, "Not converted yet", "indexed"
         except Exception as exc:  # one bad filing must not stop the corpus
             status, raw_format, md_tokens, action = "ERROR", None, None, "failed"
             error = f"{type(exc).__name__}: {exc}"
-        stage_status = ("done" if status in CONVERTED else "source_incomplete" if status == "SOURCE_INCOMPLETE"
-                        else "pending" if status == "MISSING" else "failed")
-        state.upsert_filing(db, filing, status, raw_format, md_tokens)
+        stage_status = {"SOURCE_INCOMPLETE": "source_incomplete", "MISSING": "pending",
+                        "MISSING_SOURCE": "missing_source"}.get(status, "done" if status in CONVERTED else "failed")
+        state.set_conversion(db, filing.filing_id, status, raw_format, md_tokens)
         state.set_stage(db, filing.filing_id, STAGE, stage_status, started=started, finished=now(),
                         tokens_in=md_tokens, error=error)
         rows.append({"filing_id": filing.filing_id, "action": action, "conversion_status": status,
                      "raw_format": raw_format or "", "markdown_tokens": md_tokens if md_tokens is not None else "",
                      "error": error or ""})
-        if action == "converted" or error:
+        if action in {"converted", "reconverted"} or error:
             log(f"[{index}/{len(filings)}] {filing.filing_id}: {action} {status} {error or ''}".rstrip())
         if index % 200 == 0:
             db.commit()
@@ -85,11 +113,11 @@ def write_summary(folder: Path, rows: list[dict]) -> dict:
     summary = {
         "filings": len(rows),
         "converted": len(converted),
-        "newly_converted": sum(r["action"] == "converted" for r in rows),
+        "newly_converted": sum(r["action"] in {"converted", "reconverted"} for r in rows),
         "conversion_status": dict(Counter(r["conversion_status"] for r in rows)),
         "markdown_tokens": sum(int(r["markdown_tokens"] or 0) for r in converted),
         "errors": [{"filing_id": r["filing_id"], "error": r["error"]} for r in rows
-                   if r["conversion_status"] in {"ERROR", "MISSING"}],
+                   if r["conversion_status"] in {"ERROR", "MISSING", "MISSING_SOURCE"}],
         "note": "Token counts are text tokens from the conversion audit records, not billing measurements.",
     }
     write_json(folder / "conversion_index.json", summary)

@@ -8,11 +8,19 @@ import sqlite3
 
 from pipeline.records import now
 
+# Registry columns (filled by `scan`) followed by conversion columns (filled by `convert`).
+FILING_COLUMNS = {
+    "filing_id": "TEXT PRIMARY KEY", "company_dir": "TEXT", "ticker": "TEXT", "company_id": "TEXT",
+    "cik": "TEXT", "year": "INTEGER", "form": "TEXT", "accession": "TEXT", "filing_date": "TEXT",
+    "period": "TEXT", "is_amendment": "INTEGER", "amends_filing_id": "TEXT", "raw_path": "TEXT",
+    "markdown_path": "TEXT", "raw_sha256": "TEXT", "manifest_json": "TEXT", "scan_status": "TEXT",
+    "first_seen": "TEXT", "last_seen": "TEXT",
+    "conversion_status": "TEXT", "raw_format": "TEXT", "markdown_tokens": "INTEGER",
+}
+REGISTRY_FIELDS = [c for c in FILING_COLUMNS if c not in {"conversion_status", "raw_format", "markdown_tokens"}]
+
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS filings (
-    filing_id TEXT PRIMARY KEY, company_dir TEXT, ticker TEXT, company_id TEXT, year INTEGER,
-    form TEXT, raw_path TEXT, markdown_path TEXT, conversion_status TEXT, raw_format TEXT,
-    markdown_tokens INTEGER);
+CREATE TABLE IF NOT EXISTS filings (""" + ", ".join(f"{k} {v}" for k, v in FILING_COLUMNS.items()) + """);
 CREATE TABLE IF NOT EXISTS stage_status (
     filing_id TEXT NOT NULL, stage TEXT NOT NULL, model_tag TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL, started TEXT, finished TEXT, tokens_in INTEGER, tokens_kept INTEGER,
@@ -23,7 +31,22 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE TABLE IF NOT EXISTS progress (
     run_id INTEGER PRIMARY KEY, filing_id TEXT, chunks_done INTEGER, chunks_total INTEGER,
     updated_at TEXT);
+CREATE INDEX IF NOT EXISTS stage_status_by_status ON stage_status (stage, status);
 """
+INDEXES = """
+CREATE INDEX IF NOT EXISTS filings_by_year ON filings (year);
+CREATE INDEX IF NOT EXISTS filings_by_form ON filings (form);
+CREATE INDEX IF NOT EXISTS filings_by_company ON filings (company_dir);
+"""
+
+
+def _migrate(connection: sqlite3.Connection) -> None:
+    """Add registry columns to a database created by an older version (the DB is rebuildable)."""
+    existing = {row[1] for row in connection.execute("PRAGMA table_info(filings)")}
+    for name, kind in FILING_COLUMNS.items():
+        if name not in existing:
+            connection.execute(f"ALTER TABLE filings ADD COLUMN {name} {kind.replace(' PRIMARY KEY', '')}")
+    connection.executescript(INDEXES)
 
 
 def connect(path: Path, readonly: bool = False) -> sqlite3.Connection:
@@ -34,20 +57,23 @@ def connect(path: Path, readonly: bool = False) -> sqlite3.Connection:
         connection = sqlite3.connect(path)
         connection.execute("PRAGMA journal_mode=WAL")
         connection.executescript(SCHEMA)
+        _migrate(connection)
     connection.row_factory = sqlite3.Row
     return connection
 
 
-def upsert_filing(db: sqlite3.Connection, filing, conversion_status: str, raw_format: str | None,
-                  markdown_tokens: int | None) -> None:
-    db.execute(
-        """INSERT INTO filings VALUES (?,?,?,?,?,?,?,?,?,?,?)
-           ON CONFLICT(filing_id) DO UPDATE SET company_dir=excluded.company_dir, ticker=excluded.ticker,
-           company_id=excluded.company_id, year=excluded.year, form=excluded.form, raw_path=excluded.raw_path,
-           markdown_path=excluded.markdown_path, conversion_status=excluded.conversion_status,
-           raw_format=excluded.raw_format, markdown_tokens=excluded.markdown_tokens""",
-        (filing.filing_id, filing.company_dir, filing.ticker, filing.company_id, filing.year, filing.form,
-         str(filing.raw_path), str(filing.markdown_path), conversion_status, raw_format, markdown_tokens))
+def register(db: sqlite3.Connection, values: dict) -> None:
+    """Insert or update a filing's registry fields; conversion fields are left untouched."""
+    columns = [c for c in REGISTRY_FIELDS if c in values]
+    updates = ", ".join(f"{c}=excluded.{c}" for c in columns if c not in {"filing_id", "first_seen"})
+    db.execute(f"INSERT INTO filings ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))}) "
+               f"ON CONFLICT(filing_id) DO UPDATE SET {updates}", [values[c] for c in columns])
+
+
+def set_conversion(db: sqlite3.Connection, filing_id: str, status: str, raw_format: str | None,
+                   markdown_tokens: int | None) -> None:
+    db.execute("UPDATE filings SET conversion_status=?, raw_format=?, markdown_tokens=? WHERE filing_id=?",
+               (status, raw_format, markdown_tokens, filing_id))
 
 
 def set_stage(db: sqlite3.Connection, filing_id: str, stage: str, status: str, *, model_tag: str = "",
@@ -92,14 +118,18 @@ def summary(path: Path) -> dict | None:
         for row in db.execute("SELECT stage, model_tag, status, COUNT(*) n FROM stage_status GROUP BY 1,2,3 ORDER BY 1,2,3"):
             key = row["stage"] + (f" [{row['model_tag']}]" if row["model_tag"] else "")
             stages.setdefault(key, {})[row["status"]] = row["n"]
-        conversion = {r["conversion_status"]: r["n"] for r in db.execute(
-            "SELECT conversion_status, COUNT(*) n FROM filings GROUP BY 1 ORDER BY 1")}
+        conversion = {r["s"]: r["n"] for r in db.execute(
+            "SELECT COALESCE(conversion_status, 'NOT_CONVERTED') s, COUNT(*) n FROM filings GROUP BY 1 ORDER BY 1")}
+        scan = {r["s"]: r["n"] for r in db.execute(
+            "SELECT COALESCE(scan_status, 'unknown') s, COUNT(*) n FROM filings GROUP BY 1 ORDER BY 1")}
+        forms = {r["form"] or "unknown": r["n"] for r in db.execute(
+            "SELECT form, COUNT(*) n FROM filings GROUP BY 1 ORDER BY 2 DESC")}
         totals = db.execute("SELECT COUNT(*) n, COALESCE(SUM(markdown_tokens), 0) t FROM filings "
                             "WHERE conversion_status IN ('CHECKED_TEXT', 'REVIEW_REQUIRED')").fetchone()
         last = db.execute("SELECT * FROM runs ORDER BY run_id DESC LIMIT 1").fetchone()
         return {
             "filings": db.execute("SELECT COUNT(*) FROM filings").fetchone()[0],
             "converted": totals["n"], "markdown_tokens": totals["t"],
-            "conversion_status": conversion, "stages": stages,
+            "conversion_status": conversion, "scan_status": scan, "forms": forms, "stages": stages,
             "last_run": dict(last) if last else None,
         }
