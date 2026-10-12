@@ -1,0 +1,15 @@
+# Pipeline settings. Relative paths are resolved against this file's folder.
+
+[paths]
+raw = "10K_Filings"          # read-only input
+markdown = "Markdown_10K"    # conversion output; existing files are never rewritten
+outputs = "outputs"          # per-stage outputs
+runs = "runs"                # status database and logs
+
+[tokens]
+encoding = "o200k_base"
+cache_dir = ".cache/tiktoken"
+
+[gpu]
+# 16,376 MiB physical; keep headroom for Windows and the display.
+vram_budget_mib = 14336
