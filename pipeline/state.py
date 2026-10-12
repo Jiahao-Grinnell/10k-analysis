@@ -68,6 +68,16 @@ def start_run(db: sqlite3.Connection, command: str, args: dict) -> int:
     return cursor.lastrowid
 
 
+def set_progress(db: sqlite3.Connection, run_id: int | None, filing_id: str, done: int, total: int) -> None:
+    if run_id is None:
+        return
+    db.execute("""INSERT INTO progress VALUES (?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET
+                  filing_id=excluded.filing_id, chunks_done=excluded.chunks_done,
+                  chunks_total=excluded.chunks_total, updated_at=excluded.updated_at""",
+               (run_id, filing_id, done, total, now()))
+    db.commit()
+
+
 def finish_run(db: sqlite3.Connection, run_id: int, exit_code: int) -> None:
     db.execute("UPDATE runs SET finished=?, exit_code=? WHERE run_id=?", (now(), exit_code, run_id))
     db.commit()

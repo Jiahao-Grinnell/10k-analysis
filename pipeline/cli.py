@@ -6,6 +6,9 @@ from contextlib import closing
 from pathlib import Path
 
 from pipeline import config, convert_stage, corpus, state
+from pipeline.classify import client as clients
+from pipeline.classify import stage as classify_stage
+from pipeline.segment import stage as segment_stage
 
 
 def _filters(parser: argparse.ArgumentParser) -> None:
@@ -15,9 +18,15 @@ def _filters(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--limit", type=int, help="Process at most N filings (after other filters)")
 
 
+def _args(args) -> dict:
+    """Command options for the runs table (without the cached filing list or handler)."""
+    return {k: v for k, v in vars(args).items() if not k.startswith("_") and k != "func"}
+
+
 def _selected(cfg, args) -> list:
-    filings = corpus.list_filings(cfg.raw_dir, cfg.markdown_dir)
-    chosen = corpus.select(filings, args.filing, args.company, args.year, args.limit)
+    if getattr(args, "_filings", None) is None:  # discovery takes seconds; do it once per command
+        args._filings = corpus.list_filings(cfg.raw_dir, cfg.markdown_dir)
+    chosen = corpus.select(args._filings, args.filing, args.company, args.year, args.limit)
     if not chosen:
         raise SystemExit("No filings match the given filters")
     return chosen
@@ -26,13 +35,48 @@ def _selected(cfg, args) -> list:
 def cmd_convert(cfg, args) -> int:
     filings = _selected(cfg, args)
     with closing(state.connect(cfg.db_path)) as db:
-        run_id = state.start_run(db, "convert", vars(args))
+        run_id = state.start_run(db, "convert", _args(args))
         print(f"convert: {len(filings)} filings (existing Markdown is indexed, never rewritten)", flush=True)
         result = convert_stage.run(cfg, db, filings)
         code = 1 if result["errors"] else 0
         state.finish_run(db, run_id, code)
     _print_convert(result)
     return code
+
+
+def cmd_segment(cfg, args) -> int:
+    filings = _selected(cfg, args)
+    with closing(state.connect(cfg.db_path)) as db:
+        run_id = state.start_run(db, "segment", _args(args))
+        print(f"segment: {len(filings)} filings (finished filings are skipped unless --force)", flush=True)
+        result = segment_stage.run(cfg, db, filings, force=args.force)
+        code = 1 if result["failures"] else 0
+        state.finish_run(db, run_id, code)
+    print(f"segment: {result['counts']}")
+    return code
+
+
+def cmd_classify(cfg, args, client=None) -> int:
+    filings = _selected(cfg, args)
+    client = client or clients.from_config(cfg, fake=args.fake_model)
+    with closing(state.connect(cfg.db_path)) as db:
+        run_id = state.start_run(db, "classify", _args(args))
+        print(f"classify: {len(filings)} filings with model '{client.tag}', one filing at a time", flush=True)
+        try:
+            result = classify_stage.run(cfg, db, filings, client, force=args.force, run_id=run_id)
+        except BaseException:
+            state.finish_run(db, run_id, 130)
+            raise
+        code = 1 if result["failures"] else 0
+        state.finish_run(db, run_id, code)
+    print(f"classify [{client.tag}]: {result['counts']}")
+    return code
+
+
+def cmd_all(cfg, args) -> int:
+    client = clients.from_config(cfg, fake=args.fake_model)  # fail early if no model is configured
+    codes = [cmd_convert(cfg, args), cmd_segment(cfg, args), cmd_classify(cfg, args, client)]
+    return max(codes)
 
 
 def cmd_rebuild_index(cfg, args) -> int:
@@ -82,6 +126,18 @@ def main(argv: list[str] | None = None) -> int:
     convert = sub.add_parser("convert", help="Index existing Markdown; convert filings that have none")
     _filters(convert)
     convert.set_defaults(func=cmd_convert)
+    segment = sub.add_parser("segment", help="Split Markdown into reading chunks")
+    _filters(segment)
+    segment.add_argument("--force", action="store_true", help="Redo filings that are already done")
+    segment.set_defaults(func=cmd_segment)
+    for name, func, text in [("classify", cmd_classify, "Label every chunk with the local model"),
+                             ("all", cmd_all, "convert + segment + classify for the selected filings")]:
+        command = sub.add_parser(name, help=text)
+        _filters(command)
+        command.add_argument("--force", action="store_true", help="Redo filings that are already done")
+        command.add_argument("--fake-model", action="store_true",
+                             help="Use the test stand-in instead of a local model (labels everything UNCERTAIN)")
+        command.set_defaults(func=func)
     sub.add_parser("status", help="Show per-stage counts").set_defaults(func=cmd_status)
     sub.add_parser("rebuild-index", help="Recreate the status database from files").set_defaults(func=cmd_rebuild_index)
     args = parser.parse_args(argv)

@@ -7,6 +7,18 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = ROOT / "config.toml"
+CLASSIFY_DEFAULTS = {
+    "backend": "openai",        # any OpenAI-compatible local server; "fake" is a test stand-in
+    "base_url": "http://127.0.0.1:8080",
+    "model_tag": "",            # set once a local model is chosen
+    "model": "",                # model name sent in requests (llama-server ignores it)
+    "parallel_requests": 4,     # concurrent requests for chunks of the SAME filing
+    "timeout_seconds": 300,
+    "max_output_tokens": 256,
+    "context_tokens": 300,      # tail of the previous chunk given as context
+    "prompt_version": "classify_v1",
+    "chat_template_kwargs": {"enable_thinking": False},
+}
 
 
 @dataclass(frozen=True)
@@ -19,6 +31,8 @@ class Config:
     encoding: str
     tiktoken_cache: Path
     vram_budget_mib: int
+    chunk_max_tokens: int
+    classify: dict
     data: dict
 
     @property
@@ -41,5 +55,8 @@ def load(path: Path | str | None = None) -> Config:
         encoding=tokens.get("encoding", "o200k_base"),
         tiktoken_cache=(base / tokens.get("cache_dir", ".cache/tiktoken")).resolve(),
         vram_budget_mib=int(data.get("gpu", {}).get("vram_budget_mib", 14336)),
+        chunk_max_tokens=int(data.get("segment", {}).get("chunk_max_tokens", 2000)),
+        classify={**CLASSIFY_DEFAULTS, **data.get("classify", {}),
+                  "prompts_dir": str((base / data.get("classify", {}).get("prompts_dir", "prompts")).resolve())},
         data=data,
     )

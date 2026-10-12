@@ -10,6 +10,23 @@ runs = "runs"                # status database and logs
 encoding = "o200k_base"
 cache_dir = ".cache/tiktoken"
 
+[segment]
+chunk_max_tokens = 2000
+
+[classify]
+backend = "openai"               # "openai" = any OpenAI-compatible local server; "fake" = test stand-in
+base_url = "http://127.0.0.1:8080"
+model_tag = ""                   # set when a local model is chosen (TASK-06/07)
+parallel_requests = 4            # concurrent requests, always chunks of the same filing
+timeout_seconds = 300
+max_output_tokens = 256
+context_tokens = 300
+prompt_version = "classify_v1"
+prompts_dir = "prompts"
+
+[classify.chat_template_kwargs]
+enable_thinking = false
+
 [gpu]
 # 16,376 MiB physical; keep headroom for Windows and the display.
 vram_budget_mib = 14336

@@ -6,10 +6,9 @@ How the pipeline in SPEC.md is built. Standing rules are in AGENTS.md.
 
 **Code that already exists**
 - `convertmd.py` (v1.1.0) converts raw filings to `Markdown_10K/`. It writes a `.audit.json` per filing plus `conversion_report.csv` and `conversion_summary.json`.
-  - Its `--resume` option reuses an output only when that output's stored `CODE_HASH` (a SHA-256 of `convertmd.py`) matches the current file.
-- `verify_outputs.py` re-checks the converted corpus; `tests/test_conversion.py` holds 24 tests for the converter. All 24 pass.
+  - Its `--resume` option reuses an output when the stored converter hash matches the current `CODE_HASH` (SHA-256 of `convertmd.py`) or is in `COMPATIBLE_CHECKED_HASHES` with all checks passed.
+- `verify_outputs.py` re-checks the converted corpus; `tests/test_conversion.py` holds 24 tests for the converter.
 - The venv was created with **uv** (`.venv`, Python 3.12.14) and contains no pip.
-- The old pytest temp folder `.cache/pytest-tmp` has broken permissions (access denied), and `pytest.ini` points there. Until that folder is removed by the user, run the tests with `-o addopts="" --basetemp=<another folder>`. TASK-01 moves the basetemp to a fresh folder.
 
 **What the Markdown keeps and loses** (this matters for segmentation)
 - Only real `<h1>`–`<h6>` become Markdown headings.
@@ -19,106 +18,141 @@ How the pipeline in SPEC.md is built. Standing rules are in AGENTS.md.
 
 **Machine**
 - NVIDIA RTX 5000 Ada Laptop, 16,376 MiB, driver 581.95 (CUDA 13.0); 64 GB RAM; Windows 11.
-- git 2.52 is installed, with global user configured.
+- 566 GB free on C:.
+- git 2.52.
+
+**Already built** (TASK-01, TASK-02):
+- status DB and filing index;
+- convert, segment and classify stages with resume;
+- FakeClient.
+
+Measured on the full development corpus:
+- Segmentation: 2,894 filings, 382,553 chunks, all lossless, in about 12 minutes.
+- Discovering the 2,896 filings via `convertmd.discover()` takes about 8.6 s.
+
+## 0.1 Purpose and target scale (revised 2026-10-12)
+
+**Purpose.** This tool prepares filings for the final extraction, which Codex or Claude scheduled tasks perform one filing at a time. It does not download filings and does not extract amounts. The goal is the fewest tokens for the scheduled tasks without losing relevant content.
+
+**Input.** Everything lives in `10K_Filings/` in the downloader's layout, and the user keeps adding new companies there. The first 100 companies are the development sample.
+
+**Target scale.** About 5,000 companies, 1993 to the present. Forms: 10-K, 10-K405, 10-KSB, 10-KSB405, 10-KT and amendments.
+
+| | Estimate |
+|---|---|
+| Filings | 50k–150k |
+| Markdown | 30–90 GB, 10–30B tokens |
+| Segmentation | 10–20 h |
+| Generative classification of every chunk at 3–6k tokens/s | 1–3 months |
+
+**Consequences for the design:**
+- an incremental scan into a DB registry (§1.4);
+- the converter forms change (§1.5);
+- two-tier filtering (§1.6);
+- compaction and published output (§1.7–1.8);
+- a streaming flow with a disk guard (§1.9);
+- validation on companies outside the first 100 (§1.3).
+
+All of these numbers are re-measured in the pilot (TASK-12).
 
 ## 1. Structure and main components
 
 The design has three parts:
 - a Python package `pipeline/` that runs every stage from the command line;
-- a separate local model server;
+- local model servers;
 - a read-only Flask monitor that reads the pipeline's status database.
 
 | Component | Responsibility |
 |---|---|
-| `convertmd.py` (unchanged) | Raw → Markdown. Not moved or edited in v1, so `CODE_HASH` and the existing outputs stay valid. |
-| `pipeline/corpus.py` | Builds the filing list from `10K_Filings/*/filings.csv`, reusing `convertmd.discover()`. Assigns each filing an ID (`<company_dir>/<file stem>`) and attaches company, year, raw path and Markdown path. |
-| `pipeline/convert_stage.py` | Indexes existing `Markdown_10K/` results into the status database from their `.audit.json`. Calls `convertmd.conversion_job()` only for filings with no Markdown yet. Never rewrites an existing Markdown file. |
-| `pipeline/segment/` | Markdown (+ raw HTML hints) → sections and chunks. Details in §1.1. |
-| `pipeline/classify/` | Sends each chunk of one filing to the local model, applies the keep rules, and writes the per-filing outputs. Details in §1.2. |
-| `pipeline/selection/` | Builds the labeled sample, exports/imports label spreadsheets, and evaluates candidate models. Details in §1.3. |
-| `pipeline/state.py` | SQLite status database: runs, per-filing stage status, live progress. |
-| `pipeline/records.py` | Atomic file writes, per-filing record files, and the skip-or-rerun (resume) decision. |
+| `convertmd.py` | Raw → Markdown. The only planned change is accepting the extra forms (§1.5). It is never moved. |
+| `pipeline/corpus.py` | Incremental `scan` of `10K_Filings/*/filings.csv` into the DB registry; selects filings from the DB (§1.4). |
+| `pipeline/convert_stage.py` | Indexes existing results from their `.audit.json`. Converts newly registered filings into `Markdown_10K/`. Never rewrites an existing Markdown file. |
+| `pipeline/segment/` | Markdown (+ raw HTML hints) → sections and chunks (§1.1). |
+| `pipeline/classify/` | Tier 1 scores every chunk (`score.py`); tier 2 sends the undecided chunks to the instruction model. Applies the keep rules and writes per-filing labels and kept text (§1.2, §1.6). |
+| `pipeline/compact/` | Deterministic compaction of the kept text, with validation and fallback (§1.7). |
+| `pipeline/publish.py` | Clean file + map per filing, and the corpus index for scheduled tasks (§1.8). |
+| `pipeline/selection/` | Labeled sample, label spreadsheets, evaluation of models and thresholds (§1.3). |
+| `pipeline/flow.py` | Streaming run: convert/segment ahead on CPU, filter/compact/publish one filing at a time (§1.9). |
+| `pipeline/disk.py` | Free-space checks; pauses the run below a threshold. |
+| `pipeline/state.py` | SQLite status database: registry, per-filing stage status, runs, live progress. |
+| `pipeline/records.py` | Atomic file writes, per-filing record files, and the skip-or-rerun decision. |
 | `pipeline/tokens.py` | o200k_base token counting, reusing the tiktoken cache in `.cache/tiktoken`. |
 | `pipeline/cli.py` | `python -m pipeline <command>`. |
 | `monitor/` | Flask app with server-rendered pages and one small JS file for auto-refresh. |
-| llama.cpp `llama-server` (external) | Runs the local model on the GPU. Bound to `127.0.0.1`, OpenAI-compatible, with JSON-schema-constrained output. |
+| llama.cpp `llama-server` (external) | One instance for the tier-2 instruction model (OpenAI-compatible, JSON-schema output) and one for the tier-1 scorer (embedding/rerank). Both bound to `127.0.0.1`. |
 
 ### 1.1 Segmentation
 
-Segmentation has two layers: logical **sections** (what gets kept or dropped) and reading **chunks** (what the model reads).
+Segmentation has two layers: logical **sections** (what gets kept or dropped) and reading **chunks** (what the models read).
 
-1. **Blocks.** Parse the Markdown into an ordered list of blocks, each with exact character start and end offsets: heading, paragraph, pipe table, HTML table, HTML list, fenced block. Every character, including blank lines, belongs to exactly one block.
+1. **Blocks.** Parse the Markdown into an ordered list of blocks, each with exact character start and end offsets: heading, paragraph, pipe table, HTML table, HTML list, fenced block. Every character, including blank lines, belongs to exactly one block. *(Built in TASK-02.)*
 2. **Heading candidates** come from structure, by source format:
    - **HTML / iXBRL:** re-parse the raw HTML with `HtmlConverter.prepare()` (imported, not modified). Record block elements whose visible text is short and standalone, together with:
      - formatting features: bold, larger font, centered, all-caps, page break before;
      - whether the element is the target of an internal `#anchor` link.
-     Then align these candidates to Markdown blocks in document order by their whitespace-compacted visible text. This is reliable because conversion already verified that the visible text is equal and in order.
-   - **Legacy fixed-width:** line-level features inside fenced blocks: a short line, all-caps or title case, surrounded by blank lines, centered by leading spaces, or right after a page break. The fence is split at these lines.
+
+     Then align these candidates to Markdown blocks in document order by their whitespace-compacted visible text.
+   - **Legacy fixed-width:** line-level features inside fenced blocks: a short line, all-caps or title case, surrounded by blank lines, centered by leading spaces, or right after a page break.
    - **Real Markdown headings (`#`)** are used directly.
 3. **Table of contents and prose.** A candidate is treated as a table-of-contents entry, not a boundary, when:
    - it sits in a table or block run whose rows are Item references followed by page numbers; or
    - its Item sequence repeats later in the document as real headings.
 
-   Item references inside a sentence (a candidate that is not a standalone block) never become boundaries. For HTML, the targets of TOC anchor links are the preferred Item boundaries.
-4. **Hierarchy.** Assign Part → Item → subsection → note using numbering patterns:
-   - `PART I–IV`, `Item 1`/`1A`/`7A`… (Items must be monotonic within a Part);
-   - `Note N` / `N.` headings inside Item 8 or EX-13;
-   - remaining candidates become subsections.
+   Item references inside a sentence never become boundaries. For HTML, the targets of TOC anchor links are the preferred Item boundaries.
+4. **Hierarchy.**
+   - Part → Item → subsection → note, using numbering patterns: `PART I–IV`; `Item 1`/`1A`/`7A`… (monotonic within a Part); `Note N` / `N.` inside Item 8 or EX-13.
+   - 10-KSB item numbering is recognized as its own scheme.
+   - Each EX-13 document gets its own top-level node.
 
-   These rules recognize document structure only; they never decide relevance. Each EX-13 document in an SGML filing gets its own top-level node.
+   These rules recognize document structure only; they never decide relevance.
 5. **Table units.** A table block is grouped with:
-   - up to 2 short blocks right before it (caption, unit line such as "in millions");
-   - short footnote blocks right after it (blocks starting with `(1)`, `*`, `(a)` and similar).
+   - up to 2 short blocks right before it (caption, unit line);
+   - short footnote blocks right after it.
+6. **Chunks.** Sections are split into chunks of whole blocks/units with at most `chunk_max_tokens` tokens (default 2,000).
+   - An oversized table is split by rows; its header is repeated in the model input only.
+   - Oversized prose is split at paragraph or line breaks. *(Basic version built in TASK-02.)*
+7. **Fallback.** If no Item structure is found, the filing has a single `UNSTRUCTURED` section and `segmentation_quality=LOW`. It is still fully filtered.
+8. **Check.** Joining all chunk ranges must reproduce the Markdown file byte for byte. *(Enforced since TASK-02.)*
 
-   A unit is never split, unless it exceeds the chunk limit by itself (see step 6).
-6. **Chunks.** Sections are split into chunks of whole blocks/units with at most `chunk_max_tokens` tokens (default 2,000, set in `config.toml`).
-   - An oversized table unit is split by rows. Its header rows are repeated in the model input of each piece, but the stored character ranges stay verbatim.
-   - An oversized prose block is split at paragraph or line breaks.
-7. **Fallback.** If no Item structure is found, the filing is still split into chunks under a single `UNSTRUCTURED` section and marked `segmentation_quality=LOW`. It is still fully classified.
-8. **Check.** Joining all chunk ranges must reproduce the Markdown file byte for byte. If not, the filing fails segmentation and is not classified.
+Each chunk record contains: `filing_id`, `chunk_id`, `section_id`, `heading_path`, `item`, `start`, `end`, `tokens`, `kind`, `quality`, and fence flags.
 
-Each chunk record contains: `filing_id`, `chunk_id`, `section_id`, `heading_path`, `item`, `start`, `end`, `tokens`, `kind` (prose/table/mixed), `quality`.
-
-### 1.2 Classification
+### 1.2 Tier-2 classification request, keep rules, outputs
 
 **Order**
-- Filings are processed strictly one after another. Within one filing, up to `parallel_requests` chunk requests (default 4) run at the same time against the server's parallel slots. Every request contains text from that filing only.
-- The filing's outputs are written before the next filing starts.
+- Filings are processed strictly one after another.
+- Within one filing, up to `parallel_requests` chunk requests (default 4) run at the same time against the server's slots. Every request contains text from that filing only.
 
 **Prompt**
-- The prompt is versioned: `prompts/classify_v1.md` plus `prompts/definitions.md`, where the definitions are copied verbatim from the .docx table.
-- The prompt asks for label, categories and a one-sentence reason, and states the rule "prefer UNCERTAIN over DROP when unsure".
+- Versioned files: `prompts/classify_v1.md` plus `prompts/definitions.md` (copied verbatim from the .docx table) and `prompts/schema.json`.
+- The prompt says that the goal is to remove only clearly irrelevant text, and to prefer UNCERTAIN over DROP when unsure.
 
 **Request**
 - `/v1/chat/completions` with:
-  - `response_format = {"type": "json_schema", "schema": ...}`, using `prompts/schema.json`;
+  - `response_format = {"type": "json_schema", "schema": ...}`;
   - `temperature 0`;
-  - `chat_template_kwargs = {"enable_thinking": false}` for models with a thinking mode;
+  - `chat_template_kwargs = {"enable_thinking": false}`;
   - a per-request timeout.
-- Input: definitions, filing name and year, heading path, the end of the previous chunk (≤ 300 tokens) as context, and the chunk text. Fenced fragments are re-closed in the model input only.
+- Input: definitions, filing name and year, heading path, the end of the previous chunk (≤ 300 tokens), and the chunk text.
 
 **Keep rules**
-- Any failure becomes UNCERTAIN with an error code: timeout, HTTP error, invalid JSON, or schema mismatch after 1 retry.
-- Section expansion: if any chunk of a section is KEEP or UNCERTAIN, all chunks of that section are kept, with `kept_by=section`.
-- Cross-references: in kept chunks, find structural references (`Note N`, `Item N`, `Exhibit 13`) and resolve them to sections of the same filing. The targets are kept with `kept_by=reference:<chunk_id>`. Unresolved references are listed in the summary.
+- Any failure becomes UNCERTAIN, after 1 retry.
+- Section expansion: if any chunk of a section is KEEP or UNCERTAIN, the whole section is kept (`kept_by=section`).
+- Cross-references (`Note N`, `Item N`, `Exhibit 13`) in kept chunks are resolved to sections of the same filing and kept (`kept_by=reference:<chunk_id>`). Unresolved references are listed.
 
-**Outputs per filing**, written atomically in this order:
-1. `.labels.jsonl` — one row per chunk with `model_label`, `final_label`, `kept_by`, `categories`, `reason`, `error` and the raw response.
-2. `.requests.jsonl` — `request_id`, `filing_id`, `chunk_ids`, prompt SHA-256, timings.
-3. `.kept.md` — verbatim chunk text in order, each preceded by a marker such as `<!-- chunk c0042 | Item 7 > Results of Operations | chars 120344-128930 | KEEP -->`.
-4. `.summary.json`.
-5. The record file. It is written last; a filing counts as done only when its record exists.
+**Outputs per filing**, written atomically, record last:
+- `.labels.jsonl`
+- `.requests.jsonl`
+- `.kept.md` (verbatim slices with markers; the input to compaction)
+- `.summary.json`
+- `.record.json`
 
 ### 1.3 Model selection
 
-**No Docker and no WSL.** Models are downloaded from Hugging Face as plain files into `models/` and run on this laptop by a native Windows server.
+**Runtime.** No Docker and no WSL. Models are downloaded from Hugging Face as plain files into `models/` and run by llama.cpp `llama-server`, native Windows CUDA build, with the build tag pinned (latest seen: b11429).
+- It runs natively on Windows; vLLM does not.
+- It supports JSON-schema output, parallel slots with continuous batching, prompt-prefix reuse, `/health` and `/slots`, and embedding and rerank modes.
 
-**Runtime: llama.cpp `llama-server`, native Windows CUDA build.** Pin the build tag (latest seen: b11429, 2026-10-05) and record it in `config.toml`.
-- It runs natively on Windows; vLLM officially does not and needs WSL2.
-- It supports JSON-schema output, parallel slots with continuous batching, prompt-prefix reuse (`cache_prompt`), and `/health` and `/slots` endpoints.
-- Ollama is the fallback (it is built on llama.cpp), but it offers less control over slots and caching.
-
-**Candidates** (verify current model cards and GGUF files at selection time):
+**Tier-2 candidates** (verify current model cards at selection time):
 
 | Candidate | Why |
 |---|---|
@@ -127,63 +161,146 @@ Each chunk record contains: `filing_id`, `chunk_id`, `section_id`, `heading_path
 | Gemma 4 E4B | Different model family, small and fast; Apache-2.0. |
 | Gemma 4 12B | Stronger second family; check that Q4 plus context fits. |
 
-Qwen3.5 uses a hybrid attention design, so llama.cpp's prompt-prefix reuse may be limited. Speed is measured, not assumed.
+**Tier-1 candidates:**
+- Qwen3-Reranker-0.6B / 4B;
+- Qwen3-Embedding-0.6B / 4B;
+- one non-Qwen alternative (for example a BGE or GTE reranker).
 
-**Model registry: adding other local models for testing.** The four candidates above are only a starting list. The design makes adding any other model a config change, not a code change.
-- **`models.toml`** has one entry per model:
-  - `name` (used as `model_tag` in output paths);
-  - Hugging Face `repo` and `file`, plus `revision`;
-  - expected `sha256`;
-  - `quant`;
+Several GGUF conversions of these are community uploads, so provenance is checked at selection time.
+
+**Model registry (`models.toml`).** Adding any model is a config change, not a code change.
+- Each entry has:
+  - `name` (used as the tag in output paths);
+  - `role` (`scorer` or `instruct`);
+  - Hugging Face `repo`, `file` and `revision`;
+  - `sha256`, `quant`;
   - `ctx_per_slot`, `parallel`;
-  - `chat_template_kwargs` (for example, turning thinking off);
-  - optional extra server flags.
-- **`pipeline models fetch <name>`** downloads the file from Hugging Face into `models/<name>/`:
-  - It uses the standard library HTTP client, can resume an interrupted download, and verifies the SHA-256. `HF_TOKEN` is used only if the repo requires login.
-  - It asks for confirmation, shows the file size, and checks free disk space first (566 GB free on C: today).
-- **`pipeline models serve <name>`** starts `llama-server` with that entry's settings on `127.0.0.1` and waits for `/health`. Only one model is loaded at a time.
-- **`pipeline models list`** shows downloaded models, their sizes, and which have evaluation results.
-- **Outputs are kept per model.** Results go under `outputs/classify/<model_tag>/` and `outputs/selection/eval/<model_tag>/`, so testing a new model never overwrites another model's results. The evaluation report compares all evaluated models side by side.
-- **Any local server works.** The classifier only talks to an OpenAI-compatible endpoint (`base_url` in `config.toml`). A model that has no GGUF file could later be served by another local, non-Docker server (for example `transformers serve`, listed on the Qwen3.5 card). That would require installing PyTorch with CUDA, which needs the user's approval and is not part of v1.
+  - `chat_template_kwargs`;
+  - extra server flags.
+- `pipeline models list | fetch | check | serve`:
+  - `fetch` uses stdlib HTTP, resumes interrupted downloads, verifies SHA-256, asks before downloading and checks free disk space;
+  - `serve` starts `llama-server` on 127.0.0.1 and waits for `/health`.
+- Results are stored per model tag, so testing a new model never overwrites another model's results.
 
 **GPU memory budget (16 GB).**
-- The GPU has 16,376 MiB in total. Windows and the display keep some of it, so the budget for model weights, KV cache and compute buffers is **≤ 14 GB**. This is set as `vram_budget_mib` in `config.toml`.
-- Before serving, `pipeline models check <name>` estimates memory as GGUF file size + KV cache for `ctx_per_slot × parallel` + about 1 GB overhead. If the estimate is over budget, it refuses and suggests:
-  - fewer parallel slots;
-  - a smaller context;
-  - a smaller quantization.
-
-  After the model loads, it records the real peak from `nvidia-smi`.
-- Approximate weight sizes:
-
-  | Model | Approx. weights |
-  |---|---|
-  | 4B at Q8 | ~4–5 GB |
-  | 9B at Q4–Q5 | ~6–7 GB |
-  | 12B at Q4 | ~7–8 GB |
-
-  All of these leave room for 4 slots × 8k context. Larger dense models (30B+) do not fit at useful quality.
-- Mixture-of-experts models (such as Gemma 4 26B A4B) fit only by keeping some experts in system RAM with llama.cpp's CPU-offload option. That is slower, and it is allowed only as an explicit per-model setting.
+- The budget for weights, KV cache and buffers is **≤ 14 GB** (`vram_budget_mib`), with tier 1 and tier 2 loaded together.
+- `models check` estimates: GGUF size + KV for `ctx_per_slot × parallel` + about 1 GB per server. If the estimate is over budget, it refuses and suggests fewer slots, a smaller context or a smaller quantization. After loading, it records the real peak from `nvidia-smi`.
+- Approximate weight sizes: 4B at Q8 about 4–5 GB; 9B at Q4–Q5 about 6–7 GB; 12B at Q4 about 7–8 GB; 0.6B scorer under 1 GB.
+- Mixture-of-experts models with CPU expert offload are allowed only as an explicit per-model setting.
 
 **Labeled sample**
-- `pipeline select-sample` picks 12 filings stratified by raw format × era and spread across companies: 8 for prompt tuning ("dev") and 4 held out ("test").
-- `pipeline export-labels` writes one `.xlsx` per filing (openpyxl). Each row is one chunk, with ID, heading path, full chunk text (≤ about 12k characters, under Excel's 32,767-character cell limit), and empty `relevant` / `category` / `note` columns.
-- `pipeline import-labels` reads the files back. Blank rows mean "not labeled" and are excluded from the metrics.
+- `select-sample` picks:
+  - 12 development filings (8 for tuning, 4 held out);
+  - about 12 external filings from companies added after the first 100, stratified by form (10-K, 10-K405, 10-KSB, 10-KT, amendment), raw format, era and company size.
+- `export-labels` writes one `.xlsx` per filing (openpyxl): chunk ID, heading path, full chunk text (≤ about 12k characters, under Excel's cell limit), and empty `relevant` / `category` / `note` columns.
+- `import-labels` reads them back. Blank rows mean unlabeled.
 
-**Evaluation** (`pipeline evaluate --model <tag>`)
-- Runs a candidate on the sample and reports:
-  - chunk-level recall and section-level recall (after keep rules);
-  - share of tokens dropped;
-  - prefill and generation tokens/s;
-  - peak GPU memory (from `nvidia-smi`);
+**Evaluation** (`pipeline evaluate`)
+- Covers tier-1 alone at candidate thresholds, and tier-1 + tier-2 combinations. It reports:
+  - chunk- and section-level recall, development and external separately;
+  - share of tokens removed;
+  - tokens/s;
+  - peak GPU memory;
   - error rate;
-  - projected full-corpus hours.
-- The user picks the model. The choice is written to `config.toml` and §1.3 of this file, with links, model file SHA-256, quantization and llama.cpp build.
-- The v1 acceptance target is section-level recall ≥ 95% on the test filings.
+  - projected hours for the target corpus.
+- Thresholds and prompts are tuned only on the 8 development tuning filings.
+- The user picks. The choice is written to `config.toml` and here, with links, file SHA-256, quantization and llama.cpp build.
+- Target: section-level recall ≥ 95% on held-out development and external filings.
 
-**Rough cost**
-- Full-corpus classification reads about 588M Markdown tokens plus the prompt overhead per chunk.
-- At a measured prefill speed of 3,000–6,000 tokens/s, that is roughly 1–3 days of GPU time. Runs are resumable, so the work can be spread over several sessions.
+### 1.4 Registry and incremental scan
+- **Registry columns.** The `filings` table gets `cik`, `accession`, `form`, `is_amendment`, `amends_filing_id`, `filing_date`, `period`, `raw_sha256` and `first_seen`, plus indexes on `stage_status(stage, status)` and `filings(year)`, `filings(form)`.
+- **`pipeline scan`**
+  - Reads every `10K_Filings/*/filings.csv` and registers rows not yet in the DB. It reads the manifest's own `sha256` column instead of hashing files.
+  - Unchanged known rows cost only a dictionary lookup, so a rescan at 150k filings stays fast. It does not use `convertmd.discover()`, which resolves every path.
+  - Same layout rules as `discover()`: rows with status `downloaded` or `already_present`; paths must stay inside `10K_Filings/`.
+  - A row whose file is missing is registered as `missing_source` and fails only itself.
+  - A known filing whose manifest `sha256` changed is flagged `source_changed`; all its later steps are redone.
+- **Amendments** are marked from the form (`/A`). They are linked to the original with the same CIK and `report_date` (latest non-amendment). If no original is found, the link is left empty and the amendment is listed.
+- **Everything else selects from the DB**: `convert`, `segment`, `classify`, `compact`, `publish`, `run`, `status`. Filters: company/CIK, year, form, stage status, `--limit`, `--filing`.
+- `rebuild-index` = drop the DB, `scan`, then re-index the per-filing records of every stage.
+
+### 1.5 Converter change (separate task, shown to the user first)
+- Extend `FORMS` in `convertmd.py` with 10-KSB, 10-KSB405, 10-KT and their `/A` forms.
+- Add the current hash `c02774c2…3823` to `COMPATIBLE_CHECKED_HASHES`, so outputs produced by v1.1 stay reusable under `--resume`.
+- Bump `VERSION` to 1.2.0.
+- The pipeline's convert stage indexes existing outputs from their audits and never re-runs the converter on them, so `Markdown_10K/` is not touched.
+- `verify_outputs.py` is updated to accept outputs whose `converter_sha256` or `verified_by_converter_sha256` is in the compatible set.
+
+### 1.6 Two-tier filtering
+
+**Tier 1: every chunk.** The scorer server compares the chunk with each category definition in `prompts/definitions.md`, using the rerank or embedding endpoint. The score is the maximum over categories.
+
+**Thresholds** (`config.toml`, part of the settings hash):
+- `score ≥ t_keep` → KEEP (decided by tier 1);
+- `score ≤ t_drop` → DROP (decided by tier 1);
+- anything in between → tier 2.
+
+`t_drop` is conservative. If no safe `t_drop` exists, tier 1 only orders and prioritizes, and every chunk goes to tier 2.
+
+**Failures**
+- A tier-1 failure sends the chunk to tier 2.
+- A tier-2 failure becomes UNCERTAIN.
+
+**Labels row additions:** `tier1_score`, `decided_by` (`tier1_keep`, `tier1_drop`, `tier2`, `failure`), models, thresholds.
+
+**Order:** one filing at a time. Both tiers finish before that filing's outputs are written.
+
+### 1.7 Deterministic compaction of kept text
+
+**Input:** a filing's kept sections (verbatim Markdown slices). The original Markdown is never modified.
+
+**Measure first.** `compact --profile` reports, per rule and per raw format, the tokens each rule would save on the kept text. Only rules that save tokens are enabled (`[compact] rules = [...]` in `config.toml`, part of the settings hash).
+
+**Candidate rules**, applied only inside HTML-table islands and normal prose, never inside fenced or `<pre>` text:
+1. Unwrap a cell's single presentational `<p>`/`<div>`/`<span>`. A cell with several block children keeps them, because those are real paragraph breaks.
+2. Remove empty non-cell wrappers.
+3. Collapse whitespace runs in HTML and prose.
+4. Convert an HTML table to a pipe table when, after unwrapping, it is rectangular, without spans, nested tables, images or multi-paragraph cells.
+5. Drop columns that are empty in every row. Spacer columns are common in SEC tables.
+6. Optional, only if profiling shows a large saving and the checks pass: merge a cell holding only `$` or `%` into its neighbouring number cell. The visible text sequence is unchanged; the record notes the change in cell count.
+
+**Section headers.** Each kept section starts with its heading path once (for example `## Item 7 > Results of Operations`). Per-chunk markers go to the map file, not the text.
+
+**Validation** (per filing, against the uncompacted kept text):
+- the visible-text sequence, whitespace-normalized, is equal;
+- the multiset of numeric tokens, including signs and parentheses, is equal;
+- the table cell grid (text + rowspan/colspan) is equal, except for the declared effect of rules 5–6, which is checked separately (only empty cells removed; `$`/`%` moved without loss).
+
+If anything fails, that filing uses the uncompacted kept text, and the reason is recorded. If compaction saves no tokens, the uncompacted text is kept.
+
+**Records:** the rules applied, check results, and tokens before and after.
+
+### 1.8 Published output for scheduled tasks
+
+**`outputs/clean/<model_tag>/<company>/<file>.clean.md`**
+
+Header (YAML front matter, short):
+
+```yaml
+filing_id: ...      # plus company, cik, ticker, form, period, filing_date, accession
+is_amendment: ...   # plus amends (filing id)
+source: ...         # plus conversion_quality
+kept_sections: ...  # plus tokens_markdown, tokens_clean
+note: ...           # only when nothing was kept: "no relevant sections kept by the local filter - not evidence of zero"
+```
+
+Body: the compacted kept sections in document order.
+
+**`<file>.clean.map.json`:** for each section in the clean file, its chunk IDs, character ranges in the original Markdown, labels, reasons, deciding tier, and compaction rules applied.
+
+**`outputs/clean/<model_tag>/clean_index.csv` and `.jsonl`**
+- One row per filing: metadata, status (`ready`, `nothing_kept`, `source_incomplete`, `failed`), paths, token counts (raw, markdown, kept, clean), the settings hash, and an `updated` timestamp.
+- Rewritten atomically after each published filing.
+- This is the work list the scheduled tasks consume. A scheduled task can record which rows it has done, keyed by `filing_id` plus the settings hash, and pick up new rows as they appear.
+
+**`clean_summary.json`:** weighted token savings for Markdown → kept, kept → clean, Markdown → clean and raw → clean, plus per-filing distribution figures.
+
+### 1.9 Streaming flow, disk guard, long runs
+- **`pipeline run`** works on the DB selection (default: everything not yet published). It uses:
+  - a CPU worker that converts and segments up to `prefetch` filings ahead (default 20);
+  - the GPU path, which filters, compacts and publishes one filing at a time, finishing each before the next.
+- **Disk guard:** before each filing, check free space. Below `min_free_gb` (default 50), the run pauses and the monitor warns.
+- **Clean stop:** `Ctrl+C` stops after the current request. A killed process leaves no record for the unfinished filing.
 
 ## 2. Data storage
 
@@ -191,28 +308,27 @@ Files are the source of truth. The SQLite database is an index that can be rebui
 
 | Path | Content | In git? |
 |---|---|---|
-| `10K_Filings/` | Raw input, read-only | no |
-| `Markdown_10K/` | Existing conversion output, read-only, except that new files may be added for unconverted filings | no |
+| `10K_Filings/` | All raw input, written by the user's downloader; read-only for this tool | no |
+| `Markdown_10K/` | Conversion output; existing files never rewritten, new filings added | no |
 | `outputs/segments/<company>/<file>.segments.jsonl` + `.record.json` | Chunks and the segmentation record | no |
 | `outputs/classify/<model_tag>/<company>/<file>.*` | labels, requests, kept, summary, record | no |
-| `outputs/classify/<model_tag>/classification_report.csv`, `classification_summary.json` | Corpus report | no |
-| `outputs/selection/` | Sample list, label xlsx files, evaluation reports | no (label files are backed up by the user) |
-| `runs/pipeline.sqlite` | Status DB (WAL mode) | no |
-| `runs/logs/` | Run logs | no |
+| `outputs/clean/<model_tag>/<company>/<file>.clean.md`, `.clean.map.json`, `.record.json` | Published output | no |
+| `outputs/clean/<model_tag>/clean_index.csv`, `.jsonl`, `clean_summary.json` | Work list and savings for scheduled tasks | no |
+| `outputs/selection/` | Sample list, label xlsx files, evaluation reports | no (label files backed up by the user) |
+| `runs/pipeline.sqlite`, `runs/logs/`, `runs/tmp/` | Status DB (WAL), logs, temp | no |
 | `tools/llama.cpp/`, `models/` | Server binaries and GGUF weights | no |
-| `config.toml` | Paths, chunk size, parallelism, server URL, active model tag, prompt version, VRAM budget | yes |
-| `models.toml` | Model registry: one entry per local model | yes |
+| `config.toml` | Paths, chunk size, models, thresholds, compaction rules, prompt version, VRAM budget, disk threshold | yes |
+| `models.toml` | Model registry | yes |
 | `prompts/` | Definitions, prompt, JSON schema | yes |
 
 **Record file contents** (`.record.json`):
-- `stage`, `stage_version` (an explicit string such as `segment-1`, not a file hash);
+- `stage`, `stage_version` (an explicit string, not a file hash);
 - input SHA-256s, `settings_sha256`, status, output SHA-256s, timings, error.
-- For classification, the settings also include the prompt files' SHA-256, model file SHA-256, quantization and llama.cpp build.
 
-**Skip-or-rerun rule:** a filing is skipped only if its record matches the current inputs, version and settings, and its output hashes still verify.
+**Skip-or-rerun rule:** a filing is skipped only if its record matches the current inputs, version and settings, and its output hashes still verify. Each stage's inputs include the previous stage's output hash, so a change reruns exactly the affected stage and the stages after it.
 
 **Database tables**
-- `filings` (id, company, ticker, year, form, raw_format, paths, conversion quality)
+- `filings` (registry, §1.4)
 - `stage_status` (filing_id, stage, model_tag, status, started, finished, tokens_in, tokens_kept, error)
 - `runs` (run_id, command, args, started, finished, exit)
 - `progress` (run_id, filing_id, chunks_done, chunks_total, updated_at)
@@ -220,20 +336,28 @@ Files are the source of truth. The SQLite database is an index that can be rebui
 ## 3. Main data flow
 
 ```text
-10K_Filings/ (raw, read-only)
+10K_Filings/<company>/filings.csv + files   (user's downloader adds new companies over time)
+   │  scan (incremental; manifest → DB registry)
+   ▼
    │  convert (convertmd.py; existing results only indexed)
    ▼
 Markdown_10K/<company>/<file>.md (+ .audit.json)
-   │  segment (Markdown blocks + raw-HTML/legacy heading hints → sections → chunks; lossless check)
+   │  segment (blocks + raw-HTML/legacy heading hints → sections → chunks; lossless check)
    ▼
 outputs/segments/…segments.jsonl
-   │  classify (one filing at a time; llama-server on 127.0.0.1; keep rules)
+   │  filter, one filing at a time:
+   │    tier 1 scores every chunk (scorer server)
+   │    tier 2 labels the undecided chunks (instruction-model server); keep rules
    ▼
-outputs/classify/<model>/…labels.jsonl, .kept.md, .summary.json
+outputs/classify/<model>/…labels.jsonl, .kept.md
+   │  compact (deterministic rules on kept text; validated; fallback to uncompacted)
+   ▼
+outputs/clean/<model>/…clean.md + .clean.map.json, clean_index.csv   ──► Codex / Claude scheduled tasks
    │
    └─ every stage writes status → runs/pipeline.sqlite ← monitor (Flask, read-only)
 
-Model selection (once): select-sample → export-labels → user labels in Excel → import-labels → evaluate per candidate → user chooses → config.toml
+Model selection (once): select-sample (dev + external) → export-labels → user labels in Excel
+                        → import-labels → evaluate tiers and thresholds → user chooses → config.toml
 ```
 
 ## 4. Dependencies and runtime requirements
@@ -242,7 +366,7 @@ Model selection (once): select-sample → export-labels → user labels in Excel
 
 | Package | Version | Use |
 |---|---|---|
-| lxml | 6.1.3 | existing |
+| lxml | 6.1.3 | existing; also compaction |
 | mistune | 3.3.4 | existing |
 | tiktoken | 0.14.0 | existing |
 | pytest | 9.1.1 | existing |
@@ -252,31 +376,35 @@ Model selection (once): select-sample → export-labels → user labels in Excel
 The HTTP client is the standard library `urllib.request`, and settings are read with `tomllib`. No other packages are needed.
 
 **External tools** (installed only with the user's approval; no Docker, no WSL):
-- llama.cpp Windows CUDA release zip (pinned build), unpacked into `tools/llama.cpp/`. The driver supports CUDA 13.0.
-- GGUF model files downloaded from Hugging Face with `pipeline models fetch`, into `models/<name>/`. The source is the official model publisher's repo, or the quantization repo named on its model card. Each file's SHA-256 is recorded in `models.toml`.
+- llama.cpp Windows CUDA release zip (pinned build), unpacked into `tools/llama.cpp/`.
+- GGUF model files from Hugging Face via `pipeline models fetch`, into `models/<name>/`, with SHA-256 recorded.
 
 ## 5. Testing approach
 
-Tests use pytest. They need no GPU and no model: `pipeline/classify/client.py` has a `FakeClient` that returns scripted labels and failures. Real-model tests carry `@pytest.mark.model` and are skipped unless `--run-model` is given. Real-corpus tests skip when `10K_Filings/` is missing.
+Tests use pytest. They need no GPU, no model and no network: `FakeClient` (tier 2) and a fake scorer (tier 1) return scripted results. Real-model tests carry `@pytest.mark.model` and are skipped by default. Real-corpus tests skip when `10K_Filings/` is missing.
 
 | SPEC acceptance item | Test |
 |---|---|
-| One command, raw → labels + kept text | `test_e2e.py`: small HTML and legacy fixtures in a temp dir, run `convert`, `segment`, `classify` with FakeClient, assert outputs |
-| Rerun skips; prompt change reruns only classification | `test_records.py`, `test_e2e.py::test_resume` |
-| Killed mid-filing → redone, no duplicates | `test_classify.py::test_crash_mid_filing` (FakeClient raises after N chunks) |
-| Raw and `Markdown_10K` unchanged | `test_e2e.py` hashes the fixture inputs before and after; corpus check in `pipeline verify` |
-| Chunks join to Markdown exactly | `test_blocks.py`, `test_segment_*.py` (property check on every fixture), plus a real-corpus sample test |
-| Tables stay with caption/units/footnotes; split tables repeat header | `test_segment_tables.py` |
-| TOC and prose mentions are not boundaries | `test_segment_items.py`, using fixtures with a TOC table, an anchor-linked TOC, prose "see Item 7", and legacy TOC; plus per-format real filings with user-checked boundary lists in `tests/expected/` |
-| Every chunk has exactly one label; failures → UNCERTAIN | `test_classify.py` |
-| One filing ID per request | `test_classify.py::test_request_isolation` |
-| Kept text = verbatim slices, in order, all KEEP/UNCERTAIN | `test_classify.py::test_kept_text_verbatim` |
+| Raw filing → clean file, map, index row in one command | `test_e2e.py` (fixtures, fake models) |
+| Incremental scan registers exactly new filings; missing file fails alone; changed source reruns | `test_scan.py` |
+| Rerun skips; a change reruns only affected steps | `test_records.py`, `test_e2e.py` |
+| Killed mid-filing → redone, no duplicates | `test_classify.py::test_crash_mid_filing` *(exists)*, plus the same for compact/publish |
+| Inputs and `Markdown_10K` unchanged | `test_e2e.py` hashes; `pipeline verify` |
+| 10-KSB / 10-KT / amendments convert; existing outputs reused; amendment link | `test_conversion_forms.py`, `test_scan.py` |
+| Chunks join to Markdown exactly | `test_blocks.py` *(exists)*, `test_segment_*.py`, real-corpus sample |
+| Tables stay with caption/units/footnotes | `test_segment_tables.py` |
+| TOC and prose mentions are not boundaries | `test_segment_items.py` + user-checked lists in `tests/expected/` |
+| Every chunk scored or tier-1 failure recorded; one final label; failures kept | `test_two_tier.py`, `test_classify.py` *(exists)* |
+| One filing per request | `test_classify.py` *(exists)*, `test_two_tier.py` |
 | Cross-referenced notes kept | `test_crossref.py` |
-| Model selection report fields | `test_selection.py` (FakeClient) |
-| Chosen model meets recall target | Manual run of `pipeline evaluate`; the result is recorded in TASKS.md (needs GPU) |
-| Corpus report and "nothing kept in Items 7/8" list | `test_reports.py` |
-| Monitor pages show progress, idle counts, filing detail and text | `test_monitor.py` with Flask `test_client()` against a temp DB, plus manual check during a real run |
-| Existing converter behavior | existing `tests/test_conversion.py`, kept unchanged |
+| Compaction preserves text/numbers/cells; fallback on failure; no gain → original | `test_compact.py` (one test per rule, negative cases for fences, `<pre>`, multi-paragraph cells, spans) and real-sample check |
+| Clean header, map traces back, index rows and nothing-kept marking | `test_publish.py` |
+| Weighted token savings per step | `test_reports.py` |
+| Model selection report | `test_selection.py` |
+| Chosen models meet recall | manual `pipeline evaluate` (GPU), recorded in TASKS.md |
+| Streaming flow and disk guard | `test_flow.py` (patched free-space function) |
+| Monitor pages | `test_monitor.py` (Flask `test_client()`) |
+| Existing converter behavior | `tests/test_conversion.py`, kept passing |
 
 ## 6. Folder structure
 
@@ -284,12 +412,13 @@ Tests use pytest. They need no GPU and no model: `pipeline/classify/client.py` h
 intangible_analysis/
   AGENTS.md  SPEC.md  IMPLEMENTATION_PLAN.md  TASKS.md  README.md
   requirements.txt  pytest.ini  config.toml  models.toml  .gitignore  .gitattributes  .env.example
-  convertmd.py  verify_outputs.py  smoke_conversion.py      (unchanged)
+  convertmd.py  verify_outputs.py  smoke_conversion.py      (convertmd: forms change only, §1.5)
   pipeline/
-    __init__.py  __main__.py  cli.py  config.py  corpus.py
+    __init__.py  __main__.py  cli.py  config.py  corpus.py  flow.py  disk.py  publish.py
     state.py  records.py  tokens.py  convert_stage.py  reports.py
     segment/   blocks.py  html_hints.py  legacy_hints.py  structure.py  chunks.py  stage.py
-    classify/  client.py  prompt.py  rules.py  crossref.py  stage.py
+    classify/  client.py  score.py  prompt.py  rules.py  crossref.py  stage.py
+    compact/   rules.py  validate.py  stage.py
     models/    registry.py  fetch.py  server.py  vram.py
     selection/ sample.py  labels.py  evaluate.py
   prompts/     definitions.md  classify_v1.md  schema.json
@@ -307,19 +436,22 @@ uv pip install --python .venv -r requirements.txt
 # tests
 & '.\.venv\Scripts\python.exe' -m pytest -q
 
-# pipeline (examples)
-& '.\.venv\Scripts\python.exe' -m pipeline convert                 # index existing Markdown, convert missing
-& '.\.venv\Scripts\python.exe' -m pipeline segment --limit 20
-& '.\.venv\Scripts\python.exe' -m pipeline classify --filing "AAPL_Apple_Inc_CIK0000320193/2025_2025-10-31_0000320193-25-000079"
-& '.\.venv\Scripts\python.exe' -m pipeline all --company AAPL --resume
+# after the downloader adds filings to 10K_Filings/
+& '.\.venv\Scripts\python.exe' -m pipeline scan                    # register only new filings
+& '.\.venv\Scripts\python.exe' -m pipeline run                     # convert → segment → filter → compact → publish
 & '.\.venv\Scripts\python.exe' -m pipeline status
+
+# single steps / subsets
+& '.\.venv\Scripts\python.exe' -m pipeline segment --limit 20
+& '.\.venv\Scripts\python.exe' -m pipeline all --company AAPL --fake-model
+& '.\.venv\Scripts\python.exe' -m pipeline compact --profile --limit 50
 
 # local models (each step asks before downloading)
 & '.\.venv\Scripts\python.exe' -m pipeline models list
-& '.\.venv\Scripts\python.exe' -m pipeline models fetch qwen3.5-9b-q5      # download from Hugging Face into models/
-& '.\.venv\Scripts\python.exe' -m pipeline models check qwen3.5-9b-q5      # estimate GPU memory vs 14 GB budget
-& '.\.venv\Scripts\python.exe' -m pipeline models serve qwen3.5-9b-q5      # start llama-server on 127.0.0.1:8080
-& '.\.venv\Scripts\python.exe' -m pipeline evaluate --model qwen3.5-9b-q5
+& '.\.venv\Scripts\python.exe' -m pipeline models fetch qwen3.5-9b-q5
+& '.\.venv\Scripts\python.exe' -m pipeline models check qwen3.5-9b-q5 qwen3-reranker-0.6b
+& '.\.venv\Scripts\python.exe' -m pipeline models serve qwen3.5-9b-q5
+& '.\.venv\Scripts\python.exe' -m pipeline evaluate
 
 # monitor
 & '.\.venv\Scripts\python.exe' -m flask --app monitor.app run --host 127.0.0.1 --port 5000
@@ -329,18 +461,25 @@ uv pip install --python .venv -r requirements.txt
 
 The tool is local and single-user, so the measures are small:
 - **Network binding:** Flask and llama-server listen on `127.0.0.1` only. Flask debug mode is used only in local development.
-- **Monitor is read-only:** it opens SQLite with `mode=ro`. Filing pages look up paths in the database by filing ID and never build file paths from URL text, which prevents path traversal.
-- **Filing text is shown escaped:** Jinja autoescape, rendered in `<pre>`. Filings contain raw HTML, which is never rendered as HTML.
-- **No filing content leaves the machine.** The only network use is downloading tools and weights, with the user's approval.
-- **Integrity:** downloaded binaries and weights are checked against their published SHA-256 when one is available, and recorded.
-- **Secrets:** an optional `HF_TOKEN` for model downloads comes from the environment and is documented in `.env.example`. No other secrets exist.
+- **Monitor is read-only:** it opens SQLite with `mode=ro`. Filing pages look up paths in the DB by filing ID and never build file paths from URL text.
+- **Filing text is shown escaped:** Jinja autoescape, rendered in `<pre>`.
+- **No filing content leaves the machine.** The only network use is downloading the model runtime and weights, with the user's approval. The scheduled tasks read the clean files; that happens outside this tool.
+- **Untrusted input:** input files are parsed, never executed; temp files go only under `runs/tmp/`.
+- **Integrity:** binaries and weights are hashed and checked against published SHA-256 values when available.
+- **Secrets:** an optional `HF_TOKEN` comes from the environment and is documented in `.env.example`.
 
 ## 9. Key tradeoffs
 
-- **Not changing `convertmd.py`:** this avoids reconverting 2,894 filings. The cost is that segmentation must re-read the raw HTML for heading hints and align them by text order.
-- **Section expansion and UNCERTAIN-on-failure** favor recall over size. Kept text may be large for some filings, and that is accepted in v1.
-- **Generative classification of every chunk** is simple and matches SPEC, but it is slow. If the measured corpus time is unacceptable, a faster pre-scoring tier is a later iteration, not part of v1.
-- **llama.cpp natively on Windows instead of vLLM in WSL2:** setup is simpler, peak throughput is lower, and per-filing requests stay sequential across filings.
+- **Minimal change to `convertmd.py`:** only the accepted forms change, through its compatibility list, so no reconversion is needed. Heading hints for segmentation come from re-reading the raw HTML.
+- **Recall over size:** section expansion and UNCERTAIN-on-failure keep more text. The model only removes what is clearly irrelevant; compaction never removes content.
+- **Two tiers instead of generative-only:** needed at the target scale. The risk that tier 1 drops something relevant is controlled by:
+  - a conservative `t_drop`;
+  - recall measured on external filings;
+  - the "tier 1 only orders" fallback.
+- **Compaction after filtering:** compact only what survives the filter. Validation is per filing, with fallback to the verbatim kept text, so a bad rule costs savings, not content.
+- **Provenance in a sidecar map:** keeps the clean files short for the scheduled tasks, while every piece stays traceable.
+- **llama.cpp natively on Windows instead of vLLM in WSL2:** simpler setup, lower peak throughput.
+- **Single SQLite registry:** simple and fast at 150k filings with indexes; rebuildable from files.
 
 ## Sources consulted
 - [Qwen3.5-9B model card](https://huggingface.co/Qwen/Qwen3.5-9B)
@@ -349,3 +488,4 @@ The tool is local and single-user, so the measures are small:
 - [vLLM GPU installation (Windows not supported natively)](https://docs.vllm.ai/en/v0.18.1/getting_started/installation/gpu/)
 - [Gemma releases](https://ai.google.dev/gemma/docs/releases)
 - [Flask on PyPI](https://pypi.org/project/Flask/), [openpyxl on PyPI](https://pypi.org/project/openpyxl/)
+- Qwen3-Reranker GGUF builds on Hugging Face (several are community conversions; provenance checked at selection time)

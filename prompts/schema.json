@@ -1,0 +1,13 @@
+{
+  "type": "object",
+  "properties": {
+    "reason": {"type": "string"},
+    "label": {"type": "string", "enum": ["KEEP", "DROP", "UNCERTAIN"]},
+    "categories": {
+      "type": "array",
+      "items": {"type": "string", "enum": ["rd", "advertising_marketing", "organizational_capital", "intellectual_property"]}
+    }
+  },
+  "required": ["reason", "label", "categories"],
+  "additionalProperties": false
+}

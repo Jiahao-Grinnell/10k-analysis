@@ -7,9 +7,10 @@ Status flow: todo → in progress → ready for review → done (or blocked)
 ## Protected throughout Iteration 1
 
 These must not change during any task:
-- `convertmd.py` is unchanged, byte for byte (SHA-256 `c02774c2…3823`), so `--resume` keeps reusing `Markdown_10K/`.
+- `convertmd.py` is unchanged, byte for byte (SHA-256 `c02774c2…3823`). The one exception is TASK-05, which changes only `FORMS`, `VERSION` and `COMPATIBLE_CHECKED_HASHES` after the user approves the diff, and must reuse every existing output.
 - `10K_Filings/` and the existing files in `Markdown_10K/` are never modified.
 - All 24 existing tests in `tests/test_conversion.py` keep passing.
+- No request to a model ever contains text from more than one filing.
 
 ---
 
@@ -46,7 +47,7 @@ These must not change during any task:
     - All 5,798 files in `Markdown_10K/` have the same size and modification time before and after.
   - `status` shows the counts above. Deleting `runs/pipeline.sqlite` and running `rebuild-index` restores identical counts.
   - `convertmd.py` SHA-256 is unchanged.
-  - Not done in this task: raw-file hash re-verification. That belongs to `pipeline verify` (TASK-08); `verify_outputs.py` still covers it today.
+  - Not done in this task: raw-file hash re-verification. That belongs to `pipeline verify` (now TASK-12); `verify_outputs.py` still covers it today.
   - Decision: for the convert stage, the existing `.audit.json` serves as the per-filing record. No duplicate record files are written into `Markdown_10K/`. The corpus summary goes to `outputs/convert/conversion_index.{csv,json}`.
 
 ### TASK-02 — Minimal end-to-end workflow: segment → classify → outputs
@@ -79,128 +80,223 @@ These must not change during any task:
   - A crash in the middle of a filing leaves no record; the next run redoes that filing with no duplicate rows.
   - Raw and Markdown fixtures have the same hashes before and after the run.
 - **Tests to add:** `test_blocks.py` (offsets and lossless join on all fixtures), `test_classify.py` (failure → UNCERTAIN, request isolation, verbatim kept text, crash mid-filing), `test_e2e.py` (full run plus resume).
-- **Status:** todo
+- **Status:** done (the user asked to proceed to the next task on 2026-10-12)
+- **Verification (2026-10-12):**
+  - `pytest -q`: 51 passed. That is 14 new tests, including a lossless check on a spread sample of about 25 real Markdown files.
+  - Real filings, `pipeline all --fake-model --filing ...`:
+    - Apple 2025 (HTML) gave 56 chunks; Apple 1996 (legacy text) also ran.
+    - All 5 output files were written for each.
+    - A second run skipped both filings.
+  - Full corpus, `pipeline segment` (about 12 min):
+    - 2,894 filings segmented and 2 source-incomplete, with 0 failures.
+    - The lossless check is enforced for every filing: a mismatch would have failed it.
+    - 382,553 chunks in total; median 107 and max 1,853 chunks per filing.
+    - Chunk token sum is 588,440,244. It is 0.015% higher than the whole-file count because token boundaries differ at chunk edges.
+  - Startup: discovering 2,896 filings takes about 8.6 s, now done once per command.
+- **Decisions and notes:**
+  - Finished filings are skipped automatically; `--force` redoes them. There is no `--resume` flag (AGENTS.md updated).
+  - `--fake-model` labels every chunk UNCERTAIN, and its results go to `outputs/classify/fake/`. With `backend = "openai"` and no `model_tag`, `classify` stops and explains what to configure.
+  - `prompts/definitions.md` holds the .docx categories table verbatim. The .docx line "Items: 1,6,7,8,14,15" is deliberately left out of the prompt so the model is not steered toward particular Items (see SPEC §1).
+  - A record left by an older run is deleted before a filing is redone. A filing interrupted mid-classification therefore shows `running` in the DB until the next run.
 
-### TASK-03 — Monitor (Flask, read-only)
-- **Goal:** The user can watch a run in the browser and inspect any filing's results.
-- **Files:** new: `monitor/app.py`, `monitor/templates/*.html`, `monitor/static/monitor.js`; changed: `requirements.txt` (Flask 3.1.3).
+---
+
+**Scope change (2026-10-12).** This tool is the preparation step before final extraction:
+- Downloading is done by the user's own code. All filings live in `10K_Filings/`, and new companies keep being added.
+- This tool converts the filings, segments them, removes clearly irrelevant sections with local models, compacts what is kept, and publishes clean files plus a work list. Codex or Claude scheduled tasks then do the final extraction.
+- The target is about 5,000 companies, 1993 to the present, forms 10-K, 10-K405, 10-KSB(405), 10-KT and amendments. The first 100 companies are the development sample (SPEC §0, IMPLEMENTATION_PLAN §0.1).
+
+The tasks below replace the earlier TASK-03 to TASK-08.
+
+### TASK-03 — Registry and incremental scan
+- **Goal:** New filings added to `10K_Filings/` are registered quickly, and every command selects filings from the DB instead of rescanning the disk.
+- **Files:** changed: `pipeline/state.py` (registry columns, indexes), `pipeline/corpus.py` (`scan`, DB selection), `pipeline/convert_stage.py`, `pipeline/cli.py`; tests.
 - **Dependencies:** TASK-02.
-- **What it does:**
-  - Pages: overview (per-stage counts and tokens), current run (filing, chunk i/n, speed, estimated time left, last update), filing list with filters (company / year / status / stage), filing detail (stages, errors, chunks with labels and reasons, original text of a chunk), error list.
-  - Data access: the DB is opened read-only; files are looked up by filing ID only; all text is escaped.
-  - Pages auto-refresh while a run is active and binds to 127.0.0.1.
+- **What it does** (§1.4):
+  - **`scan`:**
+    - reads the manifests, registers rows not yet known, and uses the manifest `sha256` (no file hashing);
+    - a missing file becomes `missing_source`;
+    - a changed `sha256` sets `source_changed` and forces the later steps to redo;
+    - amendments are marked and linked.
+  - **DB selection:** every other command selects from the DB, with filters for company/CIK, year, form and stage status.
+  - **`rebuild-index`:** `scan` plus re-indexing of per-filing records.
 - **Acceptance criteria:**
-  - While `pipeline all --limit 3` runs with the fake client (with an artificial delay), the current-run page updates.
-  - When idle, the overview shows correct counts.
-  - Opening a filing shows its chunks, labels and reasons, and clicking a chunk shows its original text as plain text.
-  - An unknown filing ID returns 404, and path-like IDs cannot read other files.
-- **Tests to add:** `test_monitor.py` using Flask `test_client()` against a temporary DB and output folder: each page, filters, 404, HTML in filing text is escaped, traversal attempt rejected.
+  - On the development corpus, a repeated `scan` registers 0 new filings in a few seconds.
+  - `status` and `segment --filing X` start in under 2 s (about 8.6 s today).
+  - Adding a fixture company folder and rescanning registers exactly its filings.
+  - A manifest that lists a missing file yields exactly one failed filing.
+  - An edited manifest `sha256` causes a rerun of that filing only.
+  - Development-corpus IDs and outputs are unchanged.
+- **Tests to add:** `test_scan.py` (new rows only, missing file, changed source, amendment link), timing recorded in the verification note.
 - **Status:** todo
 
-### TASK-04 — Structural segmentation (Part → Item → subsection → note → table)
-- **Goal:** Replace the single `UNSTRUCTURED` section with real document structure for all four raw formats, without ever using keywords for relevance.
-- **Files:** new: `pipeline/segment/html_hints.py`, `legacy_hints.py`, `structure.py`; changed: `chunks.py`, `stage.py`; new fixtures in `tests/fixtures/`; new `tests/expected/`.
-- **Dependencies:** TASK-02.
+### TASK-04 — Monitor (Flask, read-only)
+- **Goal:** The user can watch long runs in the browser and inspect any filing's results, problems and token savings.
+- **Files:** new: `monitor/app.py`, `monitor/templates/*.html`, `monitor/static/monitor.js`, `pipeline/disk.py`; changed: `requirements.txt` (Flask 3.1.3).
+- **Dependencies:** TASK-03.
+- **What it does:**
+  - **Overview:** per-stage counts; token totals for each step (raw → Markdown → kept → clean) as they become available; free disk space with a warning below `min_free_gb`.
+  - **Current run:** filing, chunk i/n, speed, estimated time left, last update.
+  - **Filing list:** filters for company/CIK, year, form, status and stage.
+  - **Filing detail:** stages, errors, chunks with label, reason and (later) tier-1 score, and token counts per step. Clicking a chunk shows its original text.
+  - **Problem lists:** conversion failures, missing sources, UNCERTAIN-by-error chunks, (later) compaction fallbacks, and nothing-kept filings.
+  - **Safety:** read-only DB; files looked up by filing ID only; escaped text; auto-refresh; binds to 127.0.0.1.
+- **Acceptance criteria:**
+  - During `pipeline all --fake-model --limit 3` (with an artificial delay), the current-run page updates.
+  - When idle, the overview is correct.
+  - A filing's chunks and text are viewable.
+  - An unknown ID returns 404, and path-like IDs cannot read other files.
+- **Tests to add:** `test_monitor.py` (Flask `test_client()`, temp DB: each page, filters, 404, escaping, traversal, disk warning with patched free space).
+- **Status:** todo
+
+### TASK-05 — Converter: extra forms (changes `convertmd.py`; needs user approval of the diff)
+- **Goal:** 10-KSB, 10-KSB405, 10-KT and amendments convert, and no existing output is reconverted.
+- **Files:** changed: `convertmd.py` (only `FORMS`, `VERSION`, `COMPATIBLE_CHECKED_HASHES`), `verify_outputs.py` (accept compatible hashes); new test fixtures.
+- **Dependencies:** TASK-03.
+- **What it does** (§1.5): shows the diff to the user, then applies it.
+- **Acceptance criteria:**
+  - SGML fixtures of each new form convert to CHECKED_TEXT.
+  - `convertmd.py --resume` on the full development corpus reuses every existing output: 0 Markdown files change (sizes and modification times compared).
+  - `verify_outputs.py` passes.
+  - All existing tests pass.
+- **Tests to add:** `test_conversion_forms.py` (per-form fixtures, compatible-hash resume).
+- **Status:** todo
+
+### TASK-06 — Structural segmentation (Part → Item → subsection → note → table)
+- **Goal:** Replace the single `UNSTRUCTURED` section with real document structure for all raw formats and forms, without ever using keywords for relevance.
+- **Files:** new: `pipeline/segment/html_hints.py`, `legacy_hints.py`, `structure.py`; changed: `chunks.py`, `stage.py`; new fixtures in `tests/fixtures/` and `tests/expected/`.
+- **Dependencies:** TASK-02, TASK-05.
+- **Needs user action:** add a batch of companies outside the first 100 to `10K_Filings/`, covering 10-KSB, 10-KT, amendments, small companies and every era.
 - **What it does** (§1.1 steps 2–8):
-  - **Heading hints:**
-    - HTML/iXBRL: raw-HTML heading candidates with formatting and anchor-target features, aligned to Markdown blocks by text order. `convertmd.HtmlConverter.prepare()` is imported, not changed.
-    - Legacy: line-level hints inside fenced blocks.
-  - **Structure:**
-    - table-of-contents and prose mentions are excluded as boundaries;
-    - Part/Item/Note hierarchy, with EX-13 as its own top-level node;
-    - table units keep caption, unit line and footnotes together;
-    - oversized tables are split by rows with the header repeated in the model input.
+  - **Heading hints:** raw-HTML hints aligned by text order; legacy line hints.
+  - **Item structure:**
+    - TOC and prose mentions are excluded as boundaries;
+    - Part/Item/Note hierarchy;
+    - 10-KSB numbering recognized on its own terms;
+    - EX-13 as its own node.
+  - **Tables:** table units keep caption, unit line and footnotes together; split tables repeat the header in the model input.
   - **Fallback:** filings with no structure use `segmentation_quality=LOW`.
-  - Bump `stage_version` to `segment-2`, so all filings are re-segmented once.
+  - Bump `stage_version` to `segment-2`.
 - **Acceptance criteria:**
-  - The lossless join still holds on all fixtures and on a real sample of at least 40 filings (each format × each era).
-  - On fixtures, a TOC table, an anchor-linked TOC, a "see Item 7" sentence and a legacy TOC create no boundaries.
-  - For at least 8 real filings (each raw format, each era), the detected Item start positions match the boundary lists the user checked, in `tests/expected/`.
-  - No table is separated from its caption, unit line or footnotes; split tables repeat the header.
-  - The share of filings with LOW quality is reported per format and era in the segmentation summary.
-- **Tests to add:** `test_segment_items.py`, `test_segment_tables.py`, `test_segment_legacy.py`, `test_segment_real.py` (skips when the corpus is missing).
+  - The lossless join holds on all fixtures and every registered filing.
+  - TOC and prose fixtures create no boundaries.
+  - Item start positions match the boundaries the user checked in `tests/expected/` for at least 8 development and 8 external filings. Together these cover every raw format, every era, 10-KSB and 10-KT.
+  - Tables are never separated from their caption, unit line or footnotes.
+  - The LOW-quality share is reported by form, format and era.
+- **Tests to add:** `test_segment_items.py`, `test_segment_tables.py`, `test_segment_legacy.py`, `test_segment_real.py` (skips without the corpus).
 - **Status:** todo
 
-### TASK-05 — Keep rules and corpus reports
-- **Goal:** Kept text follows the SPEC rules at the section level, and the corpus report shows what was kept.
+### TASK-07 — Keep rules and filtering reports
+- **Goal:** Kept text follows the SPEC rules at the section level, and the reports show what was kept.
 - **Files:** new: `pipeline/classify/crossref.py`, `pipeline/reports.py`; changed: `pipeline/classify/rules.py`, `stage.py`.
-- **Dependencies:** TASK-04.
+- **Dependencies:** TASK-06.
 - **What it does:**
-  - **Section expansion:** if any chunk is KEEP or UNCERTAIN, the whole section is kept (`kept_by=section`).
-  - **Cross-references:** references in kept text (`Note N`, `Item N`, `Exhibit 13`) are resolved to sections of the same filing and kept (`kept_by=reference:…`). Unresolved references are listed.
-  - **Model input:** includes the heading path and the end of the previous chunk as context.
-  - **Corpus report** (`classification_report.csv` and `classification_summary.json`):
-    - per-filing status, tokens before and after, share kept;
-    - kept tokens per Item;
-    - failures;
-    - a list of filings where nothing is kept in Item 7 or 8.
+  - **Section expansion:** if any chunk is KEEP or UNCERTAIN, the whole section is kept.
+  - **Cross-references:** referenced notes, Items and exhibits in the same filing are kept; unresolved references are listed.
+  - **Model input:** heading path plus the end of the previous chunk as context.
+  - **Report:** per filing: kept tokens per Item and failures; a list of filings with nothing kept in Item 7 or 8.
 - **Acceptance criteria:**
-  - In fixtures, a section with one KEEP chunk is kept whole.
-  - A kept chunk that says "see Note 7" causes Note 7 to be kept, with the reason recorded.
-  - The report contains all fields above, and the Items 7/8 list is correct on fixtures.
-  - Classification reruns (because the rules version changed), while segmentation is not redone.
+  - A section with one KEEP chunk is kept whole.
+  - "See Note 7" causes Note 7 to be kept, with the reason recorded.
+  - The report is correct on fixtures.
+  - A rules change reruns classification only.
 - **Tests to add:** `test_rules.py`, `test_crossref.py`, `test_reports.py`.
 - **Status:** todo
 
-### TASK-06 — Local model registry, download, memory check, server
-- **Goal:** Any local model from Hugging Face can be added, downloaded, checked against the 14 GB budget and served, with no code change.
-- **Files:** new: `pipeline/models/registry.py`, `fetch.py`, `server.py`, `vram.py`; `models.toml` (the 4 candidates from §1.3 with repo, file and sha256 filled in from current model pages).
+### TASK-08 — Compaction and published output for scheduled tasks
+- **Goal:** Each filing gets a validated, compacted clean file, a provenance map and a row in the work list that the scheduled tasks consume. Weighted token savings are reported for every step.
+- **Files:** new: `pipeline/compact/rules.py`, `validate.py`, `stage.py`, `pipeline/publish.py`; changed: `pipeline/cli.py` (`compact`, `publish`, `compact --profile`), `pipeline/reports.py`, `config.toml` (`[compact]`).
+- **Dependencies:** TASK-07. It works with the fake model, so no GPU is needed.
+- **What it does** (§1.7–1.8):
+  1. **Profile:** `compact --profile` measures each candidate rule's saving on the kept text by raw format. Only rules that save tokens are enabled.
+  2. **Compact:** apply the enabled rules to the kept sections; validate the visible-text sequence, numbers with signs, and cell grids; fall back to the uncompacted text on any failure or when there is no gain.
+  3. **Publish:**
+     - `clean.md` with a YAML header and heading paths once per section;
+     - `clean.map.json` with provenance;
+     - `clean_index.csv` / `.jsonl` rewritten atomically, with nothing-kept filings explicitly marked;
+     - `clean_summary.json` with weighted savings: Markdown → kept, kept → clean, Markdown → clean, raw → clean.
+- **Acceptance criteria:**
+  - Every rule has positive and negative tests (fenced text, `<pre>`, multi-paragraph cells, spans, `$`/`%` cells).
+  - On the development corpus with the fake model (everything kept), the following are reported per format with weighted totals: compaction savings, validation failures and fallbacks.
+  - Every clean file has a header, and every part maps back to exact Markdown ranges.
+  - A filing with nothing kept says so in its header and in the index.
+  - A compaction-rule change reruns compact and publish only.
+- **Tests to add:** `test_compact.py`, `test_publish.py`, `test_reports.py` (savings math).
+- **Status:** todo
+
+### TASK-09 — Local model registry, download, memory check, servers
+- **Goal:** Any local model from Hugging Face can be added, downloaded, checked against the 14 GB budget and served, with no code change. This covers both the tier-1 scorer and the tier-2 instruction model.
+- **Files:** new: `pipeline/models/registry.py`, `fetch.py`, `server.py`, `vram.py`; `models.toml`.
 - **Dependencies:** TASK-02.
-- **What it does:**
-  - CLI: `models list | fetch | check | serve` (§1.3).
-  - Fetch: stdlib download with resume and SHA-256 check; asks before downloading and shows size and free disk.
-  - Memory: estimate checked against `vram_budget_mib`; real peak read from `nvidia-smi`.
-  - Server: started on 127.0.0.1 with the entry's settings; the pipeline waits for `/health`.
-  - The llama.cpp build is pinned in `config.toml`.
-- **Needs user approval before:** downloading the llama.cpp CUDA build and the first model.
+- **What it does** (§1.3):
+  - CLI: `models list | fetch | check | serve`. Each entry has a `role`; both servers run together on different ports.
+  - Memory: the combined estimate for the loaded models is checked against `vram_budget_mib`.
+  - The llama.cpp build is pinned.
+- **Needs user approval before:** downloading the llama.cpp CUDA build and the first models.
 - **Acceptance criteria:**
-  - Adding a new entry to `models.toml` makes it appear in `models list` without any code change.
-  - `models check` refuses a configuration over budget and suggests fewer slots, a smaller context or a smaller quantization.
-  - With one approved model: `models serve` starts it, and `pipeline all --filing <real filing>` classifies a real filing.
-  - Peak GPU memory is recorded, and results land under `outputs/classify/<model_tag>/`.
-- **Tests to add:** `test_models.py` covering registry parsing, memory estimate and refusal, a fetch resume and hash mismatch using a local fake HTTP server, and server start with a stub executable.
+  - A new `models.toml` entry appears without any code change.
+  - `check` refuses an over-budget combination and suggests what to change.
+  - With approved models, both servers start and one real filing is filtered end to end.
+  - Peak GPU memory is recorded.
+- **Tests to add:** `test_models.py` (registry, memory estimate and refusal, fetch resume and hash mismatch with a local fake HTTP server, server start with a stub executable).
 - **Status:** todo
 
-### TASK-07 — Labeled sample and model evaluation
-- **Goal:** Measure candidate models against the user's labels and record the choice.
+### TASK-10 — Two-tier filtering
+- **Goal:** Tier 1 scores every chunk quickly; tier 2 labels only the undecided chunks. Recall is protected by thresholds and fallbacks.
+- **Files:** new: `pipeline/classify/score.py`; changed: `pipeline/classify/stage.py`, `rules.py`, `config.toml`.
+- **Dependencies:** TASK-07, TASK-09.
+- **What it does** (§1.6):
+  - **Tier 1:** scores each chunk against each category definition; the score is the maximum over categories.
+  - **Thresholds:** `t_keep` and `t_drop` (part of the settings hash) decide which chunks tier 1 settles; the rest go to tier 2.
+  - **Failures:** a tier-1 failure sends the chunk to tier 2.
+  - **Labels:** rows record `tier1_score`, `decided_by`, the models and the thresholds.
+  - **Fallback:** with `t_drop` unset, every chunk goes to tier 2.
+- **Acceptance criteria:**
+  - Every chunk has a tier-1 score or a recorded tier-1 failure, and exactly one final label.
+  - Chunks between the thresholds, and every chunk that failed tier 1, reach tier 2.
+  - A threshold change reruns filtering, compact and publish only.
+  - Requests never mix filings.
+- **Tests to add:** `test_two_tier.py` (fake scorer and fake tier-2 client).
+- **Status:** todo
+
+### TASK-11 — Labeled sample (development + external) and model evaluation
+- **Goal:** Measure tier-1 and tier-2 candidates and thresholds against the user's labels, including filings from companies outside the first 100, and record the choice.
 - **Files:** new: `pipeline/selection/sample.py`, `labels.py`, `evaluate.py`; changed: `requirements.txt` (openpyxl 3.1.5).
-- **Dependencies:** TASK-05, TASK-06.
+- **Dependencies:** TASK-10, and external companies present in `10K_Filings/`.
 - **What it does:**
-  - `select-sample` picks 12 filings, stratified by format × era across companies: 8 dev and 4 test.
-  - `export-labels` writes one `.xlsx` per filing.
-  - `import-labels` reads the files back; blank rows count as unlabeled.
-  - `evaluate --model <tag>` reports chunk and section recall, tokens dropped, speed, peak GPU memory, error rate and projected corpus hours.
-  - A comparison report covers all evaluated models.
-- **User work in this task:** label the 12 spreadsheets; choose the model after seeing the report.
+  - **Sample:** 12 development filings (8 tuning, 4 held out) and about 12 external filings, stratified by form, format, era and size.
+  - **Labels:** `export-labels` writes `.xlsx` files; `import-labels` reads them back.
+  - **Evaluation:** `evaluate` reports recall (development and external separately), tokens removed, speed, GPU memory, error rate and projected time for the target corpus, for tier-1 thresholds and tier-1 + tier-2 combinations.
+- **User work in this task:** label the spreadsheets; choose the models and thresholds after seeing the report.
 - **Acceptance criteria:**
-  - Label files open in Excel, and round-trip without losing text or IDs.
-  - The report lists all metrics above for each evaluated model.
-  - The chosen model reaches section-level recall ≥ 95% on the 4 test filings.
-  - The choice (links, file SHA-256, quantization, llama.cpp build, prompt version) is written to `config.toml` and IMPLEMENTATION_PLAN.md §1.3.
-- **Tests to add:** `test_selection.py` covering stratified sampling, xlsx round trip, and metric computation with FakeClient and known labels.
+  - Label files round-trip without losing text or IDs.
+  - The report has all metrics above.
+  - The chosen combination reaches section-level recall ≥ 95% on the held-out development filings and on the external filings.
+  - The choice is recorded in `config.toml` and IMPLEMENTATION_PLAN §1.3/§1.6.
+- **Tests to add:** `test_selection.py` (sampling, xlsx round trip, metrics with fake clients and known labels).
 - **Status:** todo
 
-### TASK-08 — Pilot run and corpus verification
-- **Goal:** Prove the full pipeline works on real data with the chosen model before any full-corpus run.
-- **Files:** changed: `pipeline/cli.py` (`verify` command), `pipeline/reports.py`.
-- **Dependencies:** TASK-03, TASK-07.
+### TASK-12 — Streaming run, pilot at scale, corpus verification
+- **Goal:** Prove the whole system works on several hundred unseen filings with the chosen models, and measure the time, disk use and token savings of the full 5,000-company run.
+- **Files:** new: `pipeline/flow.py`; changed: `pipeline/cli.py` (`run`, `verify`), `pipeline/reports.py`.
+- **Dependencies:** TASK-04, TASK-08, TASK-11.
 - **What it does:**
-  - `pipeline verify` re-checks:
-    - raw file and Markdown hashes against the records;
-    - output hashes;
-    - the lossless join;
-    - one label per chunk;
-    - one filing per request.
-  - Pilot: about 20 real filings across formats and eras, run with the chosen model and watched in the monitor.
-  - The pilot is interrupted once and resumed.
-  - Measured speed and a full-corpus time estimate are recorded here.
+  - **`pipeline run`:**
+    - a CPU convert + segment worker runs ahead;
+    - the GPU path filters, compacts and publishes one filing at a time;
+    - disk guard;
+    - clean stop on Ctrl+C (§1.9).
+  - **`pipeline verify`:** checks input and Markdown hashes against the records, output hashes, the lossless join, one label per chunk, one filing per request, and compaction validation records.
+  - **Pilot:**
+    - several hundred filings from companies outside the first 100;
+    - interrupted once and resumed;
+    - watched in the monitor.
 - **Acceptance criteria:**
-  - The pilot completes, and `verify` reports 0 problems.
+  - The pilot completes and `verify` reports 0 problems.
   - The interrupted filing is redone with no duplicates.
-  - The monitor shows correct live progress during the pilot.
-  - The user reviews 3 pilot filings' kept text and finds no obvious missing relevant section, or the misses are logged as bugs with tests.
-  - The full-corpus time estimate is written here.
-- **Tests to add:** `test_verify.py` (detects a changed raw hash, a broken join, a missing label, a mixed-filing request).
+  - The user reviews 3 pilot clean files and finds no obvious misses, or misses are logged as bugs with tests.
+  - Measured throughput, disk use per filing, failure rates by stage and form, weighted token savings at each step, and the projected time and disk for the full target are written here.
+- **Tests to add:** `test_flow.py` (fake models, prefetch ordering, disk-guard pause), `test_verify.py` (changed hash, broken join, missing label, mixed-filing request, failed compaction check are detected).
 - **Status:** todo
 
 ---
