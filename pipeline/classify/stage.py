@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import time
 
-from pipeline import state, tokens
+from pipeline import control, state, tokens
 from pipeline.classify import prompt as prompts
 from pipeline.classify.client import ClientError
 from pipeline.classify.rules import KEPT, RULES_VERSION, InvalidResponse, decide, parse
@@ -120,7 +120,12 @@ def run(cfg, db, filings: list, client, force: bool = False, run_id: int | None 
     current_settings = settings(cfg, client, prompt)
     counts: Counter = Counter()
     problems = []
+    stopped = False
     for index, filing in enumerate(filings, 1):
+        if control.stop_requested(cfg):
+            stopped = True
+            log(f"Stop requested: stopping before filing {index} of {len(filings)}")
+            break
         started, clock = now(), time.perf_counter()
         segments, segment_record = segment_stage.paths(cfg, filing)
         if not segment_record.is_file() or read_json(segment_record).get("status") != "done":
@@ -178,6 +183,6 @@ def run(cfg, db, filings: list, client, force: bool = False, run_id: int | None 
             log(f"[{index}/{len(filings)}] {filing.filing_id}: FAILED {error}")
         db.commit()
     result = {"stage_version": VERSION, "model_tag": client.tag, "settings": current_settings,
-              "filings": len(filings), "counts": dict(counts), "failures": problems}
+              "filings": len(filings), "counts": dict(counts), "failures": problems, "stopped": stopped}
     write_json(cfg.outputs_dir / STAGE / client.tag / "classification_run.json", result)
     return result

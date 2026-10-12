@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 from convertmd import conversion_job
-from pipeline import state, tokens
+from pipeline import control, state, tokens
 from pipeline.corpus import CONVERTED
 from pipeline.records import now, read_json, sha256_file, write_json
 
@@ -54,7 +54,12 @@ def run(cfg, db, filings: list, convert_missing: bool = True, reconvert_changed:
         db.execute("UPDATE filings SET scan_status='registered' WHERE filing_id=?", (filing.filing_id,))
         return _from_audit(filing, next(iter(tokenizers)))
 
+    stopped = False
     for index, filing in enumerate(filings, 1):
+        if control.stop_requested(cfg):
+            stopped = True
+            log(f"Stop requested: stopping before filing {index} of {len(filings)}")
+            break
         started, raw_tokens = now(), None
         md_exists, audit_exists = filing.markdown_path.is_file(), filing.audit_path.is_file()
         try:
@@ -97,7 +102,7 @@ def run(cfg, db, filings: list, convert_missing: bool = True, reconvert_changed:
             db.commit()
             log(f"[{index}/{len(filings)}] indexed")
     db.commit()
-    return write_summary(cfg.outputs_dir / STAGE, rows)
+    return {**write_summary(cfg.outputs_dir / STAGE, rows), "stopped": stopped}
 
 
 def write_summary(folder: Path, rows: list[dict]) -> dict:

@@ -97,7 +97,7 @@ Not in this tool: downloading, final extraction of amounts, XBRL facts.
 ## Monitor (Flask)
 - The monitor is local only: bind to 127.0.0.1, use `debug=True` only locally, and leave out authentication.
 - It reads the pipeline's status files or database. It must not be required for the pipeline to run; the pipeline also runs from the command line.
-- Starting or stopping runs from the monitor is optional and only if SPEC.md includes it.
+- The monitor may start and stop `pipeline` runs (SPEC F8): as a subprocess with an argument list (never a shell), one run at a time, with POST requests carrying a token. It never edits settings and never writes to the status DB itself.
 
 ## Working rules
 - Work on one task at a time. Never start the next task unless told to.

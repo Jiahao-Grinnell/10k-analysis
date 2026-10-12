@@ -26,7 +26,7 @@ It is the step **before** final extraction. It takes filings that have already b
 | Conversion to Markdown (`convertmd.py` 1.2.0, including 10-KSB / 10-KT / amendments) | done |
 | Segmentation into lossless reading chunks | done; structural Part / Item / note segmentation is next (TASK-06) |
 | Classification pipeline with a fake model (for testing) | done |
-| Read-only web monitor | done |
+| Web monitor, with start / stop buttons | done |
 | Keep rules, compaction and clean output files | planned (TASK-07, TASK-08) |
 | Local models, two-tier filtering, model selection, pilot at scale | planned (TASK-09 to TASK-12) |
 
@@ -83,7 +83,13 @@ Options:
 
 ## Monitor
 
-`python -m monitor` serves a read-only page on `http://127.0.0.1:5000`, reachable from this computer only.
+`python -m monitor` serves a page on `http://127.0.0.1:5000`, reachable from this computer only. It reads the status database read-only.
+
+**Run control.** Processing can be started and stopped from the **Control** page instead of the command line:
+- **Start processing** runs the same `pipeline all` command in the background, with optional filters (company, year, form, max filings). Leave every field empty to process everything still unfinished; filings that are already done are skipped.
+- **Stop after current filing** finishes the filing in progress and stops cleanly. Press Start again to continue where it left off.
+- **Force stop now** ends the process at once. The filing in progress is redone next time.
+- **One run at a time:** only one run can be active, including runs started from the command line. The page shows the log of the last run it started.
 
 | Page | Shows |
 |---|---|
@@ -92,6 +98,7 @@ Options:
 | Filings | Search and filters (company, CIK, year, form, stage, status) |
 | Filing detail | Metadata, amendment link, stage status, tokens per step, every chunk with its label and reason; click a chunk to read its original text |
 | Problems | Missing or changed sources, failed stages, chunks kept after a model error, filings with nothing kept, interrupted filings |
+| Control | Start / stop processing, and the log of the last run started from the page |
 
 ## Folders
 
@@ -174,7 +181,7 @@ If plain Markdown fails these checks, the converter falls back to minimal HTML a
 & '.\.venv\Scripts\python.exe' -m pytest -q
 ```
 
-78 tests. They need no GPU, model or network: the classifier tests use a fake model client. Tests that read the real corpus are skipped when `10K_Filings/` or `Markdown_10K/` is missing. A full run takes about 1–3 minutes. Most of that is pytest cleaning its temporary folder.
+85 tests. They need no GPU, model or network: the classifier tests use a fake model client. Tests that read the real corpus are skipped when `10K_Filings/` or `Markdown_10K/` is missing. A full run takes about 1–3 minutes. Most of that is pytest cleaning its temporary folder.
 
 ## Project documents
 

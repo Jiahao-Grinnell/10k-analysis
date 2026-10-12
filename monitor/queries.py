@@ -28,6 +28,11 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def process_alive(pid: int) -> bool:
+    from monitor.runner import _process_info
+    return _process_info(pid)[0]
+
+
 def stage_counts(db) -> dict:
     stages: dict = {}
     for row in db.execute("SELECT stage, model_tag, status, COUNT(*) n FROM stage_status GROUP BY 1, 2, 3 ORDER BY 1, 2, 3"):
@@ -85,8 +90,12 @@ def run_progress(db, run: dict | None) -> dict | None:
                                                (run["started"],)).fetchone()[0]), started]), default=None)
     info["last_update"] = last.isoformat(timespec="seconds") if last else None
     idle = (_now() - last).total_seconds() if last else None
-    info["state"] = ("finished" if run["finished"] else
-                     "interrupted?" if idle is not None and idle > STALE_SECONDS else "running")
+    if run["finished"]:
+        info["state"] = {3: "stopped on request", 130: "interrupted"}.get(run["exit_code"], "finished")
+    elif run.get("pid") and not process_alive(run["pid"]):
+        info["state"] = "interrupted"  # its process is gone (force-stopped, crashed or closed)
+    else:
+        info["state"] = "interrupted?" if idle is not None and idle > STALE_SECONDS else "running"
     return info
 
 

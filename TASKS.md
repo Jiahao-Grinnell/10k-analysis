@@ -197,6 +197,51 @@ The tasks below replace the earlier TASK-03 to TASK-08.
   - A run killed without finishing shows as "interrupted?" once it has been idle for 10 minutes.
   - The monitor tests share one prepared corpus (module fixture) to keep them under a minute.
 
+### TASK-04b — Start and stop processing from the monitor (simple version)
+- **Goal:** The user can start processing all registered filings, or a filtered subset, with a button in the monitor, watch it, and stop it. The command line stays fully equivalent.
+- **Files:**
+  - new: `monitor/runner.py`, `monitor/templates/control.html`, `pipeline/control.py`;
+  - changed: `monitor/app.py`, `monitor/templates/base.html`, `overview.html`, `monitor/queries.py`, `pipeline/cli.py`, the stage `run()` loops (convert, segment, classify).
+- **Dependencies:** TASK-04.
+- **What it does** (IMPLEMENTATION_PLAN §1.10):
+  - **Control page:**
+    - a Start form with company/year/form/limit filters and a fake-model option, which launches `pipeline all` as a subprocess and writes its log;
+    - Stop after current filing (stop-request file);
+    - Force stop (terminate);
+    - the tail of the log.
+  - **One run at a time:** Start is refused while a web run or a command-line run is active.
+  - **Safety:** POST requests with a token, local requests only; the DB stays read-only for the page.
+- **Acceptance criteria:**
+  - Start from the page processes the selected filings, and progress shows on the overview.
+  - A second Start while running is refused with a message.
+  - "Stop after current filing" ends the run after the filing in progress: the run's exit code is 3, and the remaining filings stay untouched.
+  - Starting again continues with the unfinished filings and skips the done ones.
+  - Force stop ends the process, and the next start redoes the interrupted filing.
+  - A POST without the token is rejected.
+- **Tests to add:** `test_control.py` (stop file stops each stage between filings; runner start/refuse/stop/force-stop with a real subprocess on the fixture corpus; token check).
+- **Status:** done (approved by the user, 2026-10-12)
+- **Verification (2026-10-12):**
+  - `pytest -q`: 85 passed. The 7 new tests in `test_control.py` cover:
+    - each stage stopping before the next filing (classify finishes the filing in progress);
+    - a leftover stop request being cleared by a new command;
+    - argument validation;
+    - the token requirement;
+    - with real subprocesses on the fixture corpus: start, refusal of a second start, stop then resume, and force stop then redo.
+  - **Live on the real DB** (monitor at 127.0.0.1:5000, actions sent as the page's form POSTs):
+    - a POST without the token returned 400;
+    - Start for MSFT (limit 3, fake model) launched `pipeline all` in the background, and an immediate second Start was refused;
+    - "Stop after current filing", pressed after the first filing, ended that run with exit code 3 (run #11);
+    - the next Start continued with the remaining 2 filings (runs #12–15);
+    - a further Start skipped all 3 as already done.
+  - `convertmd.py` was not changed by this task.
+- **Decisions and notes:**
+  - **Force stop kills the whole process tree.** On Windows a venv's `python.exe` is a launcher that runs the real interpreter as a child, so terminating only the launcher left the run going. This was found by the force-stop test. Force stop now uses `taskkill /PID <pid> /T /F`.
+  - **Recorded PIDs:**
+    - every `runs` row records the PID of the process doing the work, so a run whose process is gone shows as "interrupted" immediately and no longer blocks Start;
+    - the web run's PID is checked together with its creation time, so a reused PID is never killed.
+  - **Exit code 3** means "stopped on request", and the monitor shows such runs as "stopped on request".
+  - The monitor writes only `runs/web_run.json`, `runs/stop.request` and `runs/logs/web_*.log`. It never writes the status DB.
+
 ### TASK-05 — Converter: extra forms (changes `convertmd.py`; needs user approval of the diff)
 - **Goal:** 10-KSB, 10-KSB405, 10-KT and amendments convert, and no existing output is reconverted.
 - **Files:** changed: `convertmd.py` (only `FORMS`, `VERSION`, `COMPATIBLE_CHECKED_HASHES`), `verify_outputs.py` (accept compatible hashes); new test fixtures.

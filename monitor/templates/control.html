@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% set running = (web and web.alive) or active %}
+{% block autorefresh %}{{ 'active' if running else 'idle' }}{% endblock %}
+{% block title %}Control · Pipeline monitor{% endblock %}
+{% block body %}
+<h1>Run control</h1>
+{% if message %}<div class="banner">{{ message }}</div>{% endif %}
+
+{% if running %}
+  <div class="card">
+    <div class="k">Status</div>
+    {% if web and web.alive %}
+      <div class="v ok">Running</div>
+      <div class="muted">Started from this page {{ web.started }} · PID {{ web.pid }}</div>
+      <div class="muted">Command: pipeline {{ web.command | join(' ') }}</div>
+      {% if web.stop_requested %}<div class="warn">Stop requested — the run stops after the filing in progress.</div>{% endif %}
+    {% else %}
+      <div class="v ok">Running</div>
+      <div class="muted">Run #{{ active.run_id }} ({{ active.command }}) was started from the command line. Stop it there, or use “Stop after current filing” below.</div>
+    {% endif %}
+    {% if active %}<div style="margin-top:8px">{% with r = active %}{% include "_run.html" %}{% endwith %}</div>{% endif %}
+    <form method="post" action="/control/stop" style="display:inline-block;margin-top:10px">
+      <input type="hidden" name="token" value="{{ run_token }}">
+      <button>Stop after current filing</button>
+    </form>
+    {% if web and web.alive %}
+    <form method="post" action="/control/force-stop" style="display:inline-block;margin-left:8px"
+          onsubmit="return confirm('End the process now? The filing in progress will be redone next time.')">
+      <input type="hidden" name="token" value="{{ run_token }}">
+      <button>Force stop now</button>
+    </form>
+    {% endif %}
+  </div>
+{% else %}
+  <div class="card">
+    <div class="k">Start processing</div>
+    <p class="muted" style="margin:4px 0 10px">Runs <code>pipeline all</code>: scan for new filings, then convert, segment and filter.
+      Filings that are already done are skipped, so leaving every field empty processes everything still unfinished.</p>
+    <form method="post" action="/control/start" class="filters">
+      <input type="hidden" name="token" value="{{ run_token }}">
+      <input name="company" placeholder="company / ticker / CIK (optional)" size="28">
+      <input name="year" placeholder="year" size="6">
+      <input name="form" placeholder="form, e.g. 10-K" size="12">
+      <input name="limit" placeholder="max filings" size="10">
+      <label><input type="checkbox" name="fake_model" {{ '' if model_configured else 'checked' }}> fake model (test only)</label>
+      <input name="fake_delay" placeholder="fake delay s" size="10">
+      <button>Start processing</button>
+    </form>
+    {% if not model_configured %}
+    <p class="warn">No local model is configured yet (TASK-09), so only the fake model works. It keeps every chunk, so nothing is filtered.</p>
+    {% endif %}
+  </div>
+{% endif %}
+
+{% if web %}
+<h2>Log of the last run started here <span class="muted">({{ web.log }})</span></h2>
+<pre class="text">{{ web.log_tail or '(empty)' }}</pre>
+{% endif %}
+{% endblock %}

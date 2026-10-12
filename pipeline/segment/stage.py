@@ -5,7 +5,7 @@ from collections import Counter
 import json
 from pathlib import Path
 
-from pipeline import state, tokens
+from pipeline import control, state, tokens
 from pipeline.corpus import CONVERTED
 from pipeline.records import atomic_text, is_current, now, read_json, sha256_file, write_json, write_record
 from pipeline.segment.blocks import parse_blocks
@@ -45,7 +45,12 @@ def segment_filing(cfg, filing) -> tuple[list[dict], int]:
 def run(cfg, db, filings: list, force: bool = False, log=print) -> dict:
     counts: Counter = Counter()
     problems = []
+    stopped = False
     for index, filing in enumerate(filings, 1):
+        if control.stop_requested(cfg):
+            stopped = True
+            log(f"Stop requested: stopping before filing {index} of {len(filings)}")
+            break
         started = now()
         try:
             if filing.conversion_status not in CONVERTED:
@@ -80,6 +85,6 @@ def run(cfg, db, filings: list, force: bool = False, log=print) -> dict:
             log(f"[{index}/{len(filings)}] segment: {dict(counts)}")
     db.commit()
     summary = {"stage_version": VERSION, "settings": settings(cfg), "filings": len(filings),
-               "counts": dict(counts), "failures": problems}
+               "counts": dict(counts), "failures": problems, "stopped": stopped}
     write_json(cfg.outputs_dir / "segments" / "segmentation_run.json", summary)
     return summary

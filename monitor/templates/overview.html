@@ -15,7 +15,7 @@
 
 <h2>Current run</h2>
 {% if o.active %}{% with r = o.active %}{% include "_run.html" %}{% endwith %}
-{% else %}<p class="muted">No run in progress. <a href="/runs">Recent runs</a></p>{% endif %}
+{% else %}<p class="muted">No run in progress. <a href="/control">Start processing</a> · <a href="/runs">Recent runs</a></p>{% endif %}
 
 <h2>Stages</h2>
 <table>

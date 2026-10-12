@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import sqlite3
 
@@ -28,7 +29,7 @@ CREATE TABLE IF NOT EXISTS stage_status (
     error TEXT, PRIMARY KEY (filing_id, stage, model_tag));
 CREATE TABLE IF NOT EXISTS runs (
     run_id INTEGER PRIMARY KEY AUTOINCREMENT, command TEXT, args TEXT, started TEXT,
-    finished TEXT, exit_code INTEGER, planned INTEGER, model_tag TEXT);
+    finished TEXT, exit_code INTEGER, planned INTEGER, model_tag TEXT, pid INTEGER);
 CREATE TABLE IF NOT EXISTS progress (
     run_id INTEGER PRIMARY KEY, filing_id TEXT, chunks_done INTEGER, chunks_total INTEGER,
     updated_at TEXT);
@@ -48,7 +49,7 @@ def _migrate(connection: sqlite3.Connection) -> None:
         if name not in existing:
             connection.execute(f"ALTER TABLE filings ADD COLUMN {name} {kind.replace(' PRIMARY KEY', '')}")
     run_columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
-    for name, kind in {"planned": "INTEGER", "model_tag": "TEXT"}.items():
+    for name, kind in {"planned": "INTEGER", "model_tag": "TEXT", "pid": "INTEGER"}.items():
         if name not in run_columns:
             connection.execute(f"ALTER TABLE runs ADD COLUMN {name} {kind}")
     connection.executescript(INDEXES)
@@ -94,9 +95,10 @@ def set_stage(db: sqlite3.Connection, filing_id: str, stage: str, status: str, *
 
 def start_run(db: sqlite3.Connection, command: str, args: dict, planned: int | None = None,
               model_tag: str = "") -> int:
-    """`planned` is the number of filings selected, used by the monitor for progress and time left."""
-    cursor = db.execute("INSERT INTO runs (command, args, started, planned, model_tag) VALUES (?,?,?,?,?)",
-                        (command, json.dumps(args, default=str), now(), planned, model_tag))
+    """`planned` is the number of filings selected, used by the monitor for progress and time left.
+    The process ID lets the monitor tell a live run from one whose process is gone."""
+    cursor = db.execute("INSERT INTO runs (command, args, started, planned, model_tag, pid) VALUES (?,?,?,?,?,?)",
+                        (command, json.dumps(args, default=str), now(), planned, model_tag, os.getpid()))
     db.commit()
     return cursor.lastrowid
 

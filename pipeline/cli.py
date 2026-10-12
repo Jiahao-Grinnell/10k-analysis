@@ -5,7 +5,7 @@ import argparse
 from contextlib import closing
 from pathlib import Path
 
-from pipeline import config, corpus, state
+from pipeline import config, control, corpus, state
 
 # Stage modules (converter, HTTP client, tokenizer) load only in the commands that need them,
 # so `status` and `scan` start quickly.
@@ -58,7 +58,7 @@ def cmd_convert(cfg, args) -> int:
         run_id = state.start_run(db, "convert", _args(args), planned=len(filings))
         print(f"convert: {len(filings)} filings (existing Markdown is indexed, never rewritten)", flush=True)
         result = convert_stage.run(cfg, db, filings, reconvert_changed=getattr(args, "reconvert_changed", False))
-        code = 1 if result["errors"] else 0
+        code = control.EXIT_STOPPED if result["stopped"] else 1 if result["errors"] else 0
         state.finish_run(db, run_id, code)
     _print_convert(result)
     return code
@@ -71,7 +71,7 @@ def cmd_segment(cfg, args) -> int:
         run_id = state.start_run(db, "segment", _args(args), planned=len(filings))
         print(f"segment: {len(filings)} filings (finished filings are skipped unless --force)", flush=True)
         result = segment_stage.run(cfg, db, filings, force=args.force)
-        code = 1 if result["failures"] else 0
+        code = control.EXIT_STOPPED if result["stopped"] else 1 if result["failures"] else 0
         state.finish_run(db, run_id, code)
     print(f"segment: {result['counts']}")
     return code
@@ -89,7 +89,7 @@ def cmd_classify(cfg, args, client=None) -> int:
         except BaseException:
             state.finish_run(db, run_id, 130)
             raise
-        code = 1 if result["failures"] else 0
+        code = control.EXIT_STOPPED if result["stopped"] else 1 if result["failures"] else 0
         state.finish_run(db, run_id, code)
     print(f"classify [{client.tag}]: {result['counts']}")
     return code
@@ -99,7 +99,12 @@ def cmd_all(cfg, args) -> int:
     from pipeline.classify import client as clients
     client = clients.from_config(cfg, fake=args.fake_model, fake_delay=args.fake_delay)  # fail early if no model is configured
     cmd_scan(cfg, args)  # pick up filings added to 10K_Filings/ since the last scan
-    codes = [cmd_convert(cfg, args), cmd_segment(cfg, args), cmd_classify(cfg, args, client)]
+    codes = []
+    for step in (cmd_convert, cmd_segment, lambda c, a: cmd_classify(c, a, client)):
+        codes.append(step(cfg, args))
+        if codes[-1] == control.EXIT_STOPPED:  # stop requested: do not start the next stage
+            print("Stopped on request; run the same command again to continue.")
+            return control.EXIT_STOPPED
     return max(codes)
 
 
@@ -178,4 +183,6 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("rebuild-index", help="Recreate the status database from files").set_defaults(func=cmd_rebuild_index)
     args = parser.parse_args(argv)
     cfg = config.load(args.config)
+    if args.command in {"convert", "segment", "classify", "all"}:
+        control.clear_stop(cfg)  # a stop request applies only to the run that was active when it was made
     return args.func(cfg, args)

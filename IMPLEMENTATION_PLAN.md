@@ -60,7 +60,7 @@ All of these numbers are re-measured in the pilot (TASK-12).
 The design has three parts:
 - a Python package `pipeline/` that runs every stage from the command line;
 - local model servers;
-- a read-only Flask monitor that reads the pipeline's status database.
+- a Flask monitor that reads the pipeline's status database (read-only) and can start or stop a pipeline run as a separate process.
 
 | Component | Responsibility |
 |---|---|
@@ -78,7 +78,8 @@ The design has three parts:
 | `pipeline/records.py` | Atomic file writes, per-filing record files, and the skip-or-rerun decision. |
 | `pipeline/tokens.py` | o200k_base token counting, reusing the tiktoken cache in `.cache/tiktoken`. |
 | `pipeline/cli.py` | `python -m pipeline <command>`. |
-| `monitor/` | Flask app with server-rendered pages and one small JS file for auto-refresh. |
+| `monitor/` | Flask app with server-rendered pages and one small JS file for auto-refresh. `monitor/runner.py` starts `pipeline all` as a subprocess and stops it (§1.10). |
+| `pipeline/control.py` | Stop-request file checked by every stage between filings. |
 | llama.cpp `llama-server` (external) | One instance for the tier-2 instruction model (OpenAI-compatible, JSON-schema output) and one for the tier-1 scorer (embedding/rerank). Both bound to `127.0.0.1`. |
 
 ### 1.1 Segmentation
@@ -302,6 +303,28 @@ Body: the compacted kept sections in document order.
 - **Disk guard:** before each filing, check free space. Below `min_free_gb` (default 50), the run pauses and the monitor warns.
 - **Clean stop:** `Ctrl+C` stops after the current request. A killed process leaves no record for the unfinished filing.
 
+### 1.10 Run control from the monitor (TASK-04b)
+
+**Start**
+- `monitor/runner.py` launches `python -m pipeline --config <config> all [filters] [--fake-model]` with `subprocess.Popen`.
+- It uses the same interpreter and an argument list (no shell). stdout and stderr go to `runs/logs/web_<timestamp>.log`.
+- The PID, command, log path and start time are saved in `runs/web_run.json`.
+
+**One at a time**
+- Start is refused while the saved web run's process is alive, or while the DB shows an active run (started from the command line).
+- Process liveness on Windows uses `OpenProcess` + `GetExitCodeProcess` through `ctypes`. `os.kill(pid, 0)` must not be used on Windows: there it terminates the process.
+
+**Stop after current filing**
+- The runner writes `runs/stop.request`.
+- `convert`, `segment` and `classify` check it before each filing. `all` checks it between stages.
+- A stopped command finishes its run row with exit code 3 (stopped). Every command clears a leftover stop file when it starts.
+
+**Force stop**
+- The runner terminates the process.
+- The unfinished filing has no record and is redone by the next run. Its stage row stays `running` and appears under Problems → interrupted.
+
+**Later:** TASK-12 replaces `all` with the streaming `run` command. The buttons stay the same.
+
 ## 2. Data storage
 
 Files are the source of truth. The SQLite database is an index that can be rebuilt from them (`pipeline rebuild-index`). Everything below survives a restart.
@@ -354,7 +377,7 @@ outputs/classify/<model>/…labels.jsonl, .kept.md
    ▼
 outputs/clean/<model>/…clean.md + .clean.map.json, clean_index.csv   ──► Codex / Claude scheduled tasks
    │
-   └─ every stage writes status → runs/pipeline.sqlite ← monitor (Flask, read-only)
+   └─ every stage writes status → runs/pipeline.sqlite ← monitor (Flask; reads the DB, can start/stop a run)
 
 Model selection (once): select-sample (dev + external) → export-labels → user labels in Excel
                         → import-labels → evaluate tiers and thresholds → user chooses → config.toml
@@ -422,7 +445,7 @@ intangible_analysis/
     models/    registry.py  fetch.py  server.py  vram.py
     selection/ sample.py  labels.py  evaluate.py
   prompts/     definitions.md  classify_v1.md  schema.json
-  monitor/     app.py  templates/  static/monitor.js
+  monitor/     app.py  queries.py  runner.py  templates/  static/monitor.js
   tests/       test_conversion.py (existing)  test_*.py  fixtures/  expected/
   outputs/  runs/  tools/  models/                          (git-ignored)
 ```
@@ -454,14 +477,18 @@ uv pip install --python .venv -r requirements.txt
 & '.\.venv\Scripts\python.exe' -m pipeline evaluate
 
 # monitor
-& '.\.venv\Scripts\python.exe' -m flask --app monitor.app run --host 127.0.0.1 --port 5000
+& '.\.venv\Scripts\python.exe' -m monitor        # http://127.0.0.1:5000 (local only)
 ```
 
 ## 8. Security measures
 
 The tool is local and single-user, so the measures are small:
 - **Network binding:** Flask and llama-server listen on `127.0.0.1` only. Flask debug mode is used only in local development.
-- **Monitor is read-only:** it opens SQLite with `mode=ro`. Filing pages look up paths in the DB by filing ID and never build file paths from URL text.
+- **Monitor reads the DB read-only:** it opens SQLite with `mode=ro`. Filing pages look up paths in the DB by filing ID and never build file paths from URL text.
+- **Run control:**
+  - The only actions are start and stop. They are POST requests that carry a per-process random token (CSRF protection), and requests are accepted only from 127.0.0.1.
+  - Filter values are passed to the subprocess as an argument list, never through a shell; the year and the limit must be integers.
+  - The monitor writes only `runs/web_run.json`, `runs/stop.request` and `runs/logs/`.
 - **Filing text is shown escaped:** Jinja autoescape, rendered in `<pre>`.
 - **No filing content leaves the machine.** The only network use is downloading the model runtime and weights, with the user's approval. The scheduled tasks read the clean files; that happens outside this tool.
 - **Untrusted input:** input files are parsed, never executed; temp files go only under `runs/tmp/`.

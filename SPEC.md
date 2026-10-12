@@ -180,7 +180,17 @@ A scheduled task can work down this list one filing at a time and skip filings i
   - an interrupted filing is redone from the start, without partial or duplicate results.
 - Each stage writes a per-filing status record and a corpus summary (CSV + JSON) with o200k_base token counts.
 
-### F8. Monitor (local Flask page, read-only)
+### F8. Monitor and run control (local Flask page)
+
+**Run control (added 2026-10-12).** The page can start and stop processing; the command line remains fully equivalent.
+- **Start:** "Start processing" launches the same `pipeline all` command as the command line in the background, with optional filters (company, year, form, limit) and a fake-model option. Finished filings are skipped automatically.
+- **One run at a time:** a run started from the command line also counts, and Start is disabled while any run is active.
+- **Stop:**
+  - "Stop after current filing" asks the run to stop cleanly after the filing in progress.
+  - "Force stop" ends it at once. The unfinished filing has no record and is redone on the next run.
+- **Log:** the page shows the tail of the run's log.
+- **Safety:** only local requests are accepted (127.0.0.1), each button carries a per-session token, and the status database is still opened read-only by the page.
+
 - **Overview:**
   - per stage, filings done / running / failed / pending / source-incomplete;
   - total tokens at each step (raw → Markdown → kept → clean) and the overall saving;
@@ -203,7 +213,7 @@ The following belong elsewhere or are out of scope:
 - **Final extraction of amounts, periods and evidence:** done by Codex or Claude scheduled tasks reading the clean files.
 - **XBRL facts extraction:** possible later.
 - **Any batch API, and any request mixing filings.**
-- **Monitor limits:** no starting, stopping or configuring runs from the monitor; no labeling inside the monitor (labeling happens in exported spreadsheets).
+- **Monitor limits:** no editing of settings (config, models, thresholds) and no labeling inside the monitor (labeling happens in exported spreadsheets). Starting and stopping runs is allowed (F8).
 - **Access and deployment:** no authentication, no multiple users, no deployment beyond the user's laptop.
 - **Content not in the filing:** no OCR of images, and no fetching of material not in the downloaded files.
 - **Other forms:** forms outside the 10-K family listed in §0 (for example 20-F or 40-F).
@@ -313,6 +323,7 @@ The following belong elsewhere or are out of scope:
 - [ ] The monitor shows per-stage counts, token totals and free disk space when no run is active.
 - [ ] From the monitor, the user can open any filing, see its chunks with scores, labels and reasons, and read a chunk's original text.
 - [ ] Conversion failures, compaction fallbacks, error-UNCERTAIN chunks and nothing-kept filings are listed.
+- [ ] From the monitor, the user can start processing (optionally filtered), see its log and progress, and stop it either after the current filing or at once. A second start is refused while any run is active, and a stopped run resumes where it left off when started again.
 
 **Tests**
 - [ ] `pytest -q` passes without a GPU, a downloaded model or network access, including an end-to-end test on small fixtures.
