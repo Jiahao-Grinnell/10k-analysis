@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import socket
 import threading
+import time
 from typing import Callable
 import urllib.error
 import urllib.request
@@ -67,8 +68,8 @@ class OpenAICompatibleClient:
 class FakeClient:
     """Test stand-in: no GPU, no model. `respond(messages)` returns text or raises."""
 
-    def __init__(self, respond: Callable[[list[dict]], str] | None = None, tag: str = "fake"):
-        self.tag = tag
+    def __init__(self, respond: Callable[[list[dict]], str] | None = None, tag: str = "fake", delay: float = 0.0):
+        self.tag, self.delay = tag, delay  # delay: seconds per request, to watch progress in the monitor
         self.respond = respond or (lambda messages: json.dumps(
             {"reason": "fake client: no model judgement", "label": "UNCERTAIN", "categories": []}))
         self.calls: list[list[dict]] = []
@@ -80,13 +81,15 @@ class FakeClient:
     def complete(self, messages: list[dict], schema: dict) -> str:
         with self._lock:
             self.calls.append(messages)
+        if self.delay:
+            time.sleep(self.delay)
         return self.respond(messages)
 
 
-def from_config(cfg, fake: bool = False):
+def from_config(cfg, fake: bool = False, fake_delay: float = 0.0):
     settings = cfg.classify
     if fake or settings["backend"] == "fake":
-        return FakeClient()
+        return FakeClient(delay=fake_delay)
     if not settings["model_tag"]:
         raise SystemExit("No local model configured: set [classify] model_tag in config.toml "
                          "(see TASK-06), or use --fake-model to test the pipeline without a model.")

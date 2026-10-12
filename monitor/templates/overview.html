@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block autorefresh %}{{ 'active' if o.active else 'idle' }}{% endblock %}
+{% block body %}
+<h1>Overview</h1>
+{% if o.disk.low %}
+<div class="banner">Low disk space: {{ o.disk.free_gb }} GB free (warning below {{ o.disk.min_free_gb }} GB). Long runs will pause.</div>
+{% endif %}
+
+<div class="grid">
+  <div class="card"><div class="k">Filings registered</div><div class="v">{{ o.filings | n }}</div><div class="muted">{{ o.companies | n }} companies</div></div>
+  <div class="card"><div class="k">Free disk (outputs)</div><div class="v {{ 'bad' if o.disk.low }}">{{ o.disk.free_gb }} GB</div><div class="muted">of {{ o.disk.total_gb }} GB · warn below {{ o.disk.min_free_gb }} GB</div></div>
+  <div class="card"><div class="k">Forms</div>{% for k, v in o.forms.items() %}<span class="pill">{{ k }} {{ v | n }}</span>{% endfor %}</div>
+  <div class="card"><div class="k">Conversion</div>{% for k, v in o.conversion.items() %}<span class="pill">{{ k }} {{ v | n }}</span>{% endfor %}</div>
+</div>
+
+<h2>Current run</h2>
+{% if o.active %}{% with r = o.active %}{% include "_run.html" %}{% endwith %}
+{% else %}<p class="muted">No run in progress. <a href="/runs">Recent runs</a></p>{% endif %}
+
+<h2>Stages</h2>
+<table>
+  <tr><th>Stage</th><th>Status counts</th></tr>
+  {% for stage, counts in o.stages.items() %}
+  <tr><td>{{ stage }}</td><td>{% for k, v in counts.items() %}<span class="pill {{ 'bad' if k == 'failed' else '' }}">{{ k }} {{ v | n }}</span>{% endfor %}</td></tr>
+  {% else %}<tr><td colspan="2" class="muted">Nothing has run yet.</td></tr>{% endfor %}
+</table>
+
+<h2>Tokens by step <span class="muted">(o200k_base text tokens, not billing)</span></h2>
+<table>
+  <tr><th>Step</th><th class="num">Filings</th><th class="num">Tokens</th><th></th></tr>
+  {% for s in o.tokens %}
+  <tr><td>{{ s.step }}</td><td class="num">{{ s.filings | n }}</td><td class="num">{{ s.tokens | n }}</td><td class="muted">{{ s.note }}</td></tr>
+  {% endfor %}
+  <tr><td>clean files for scheduled tasks</td><td class="num">–</td><td class="num">–</td><td class="muted">available with TASK-08</td></tr>
+</table>
+{% endblock %}

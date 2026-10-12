@@ -69,9 +69,12 @@ def build_corpus(root: Path, files: dict[str, dict[str, str]]) -> config.Config:
     return config.load(root / "config.toml")
 
 
+SMALL_FILES = {
+    "AAA_Alpha_Inc": {"2020_a.htm": HTML_10K, "1998_b.txt": LEGACY_10K},
+    "BBB_Beta_Corp": {"1993_c.txt": HEADER_ONLY},
+}
+
+
 @pytest.fixture
 def small_corpus(tmp_path):
-    return build_corpus(tmp_path, {
-        "AAA_Alpha_Inc": {"2020_a.htm": HTML_10K, "1998_b.txt": LEGACY_10K},
-        "BBB_Beta_Corp": {"1993_c.txt": HEADER_ONLY},
-    })
+    return build_corpus(tmp_path, SMALL_FILES)

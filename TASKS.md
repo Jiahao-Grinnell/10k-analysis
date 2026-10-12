@@ -171,7 +171,31 @@ The tasks below replace the earlier TASK-03 to TASK-08.
   - A filing's chunks and text are viewable.
   - An unknown ID returns 404, and path-like IDs cannot read other files.
 - **Tests to add:** `test_monitor.py` (Flask `test_client()`, temp DB: each page, filters, 404, escaping, traversal, disk warning with patched free space).
-- **Status:** todo
+- **Status:** done (the user asked to proceed to the next task on 2026-10-12)
+- **Verification (2026-10-12):**
+  - `pytest -q`: 67 passed (9 new in `test_monitor.py`). They cover:
+    - every page, filters, 404 for unknown and path-like IDs;
+    - escaped filing HTML, the low-disk banner, active-run progress and the problem lists;
+    - the monitor never writing to the DB;
+    - the 503 message when no DB exists.
+  - **Live run:** `python -m monitor` was serving while `pipeline all --fake-model --fake-delay 0.5 --company ABBV --limit 3` ran. `/api/status` sampled every 5 s showed:
+    - filings 0/3 → 1/3 → 2/3, then "no active run";
+    - the current filing and chunk counts advancing (55/74 → 20/85 → 60/85 → 5/110 → 85/110).
+  - **Pages on the real 2,896-filing DB** all return 200:
+    - overview 0.9 s; filings 0.5 s; problems 0.2 s;
+    - the largest filing detail (Realty Income 2017, 1,853 chunks) 1.6 s; chunk text 0.2 s.
+    - `/filing?id=..%2F..%2Fconfig.toml` returns 404.
+- **Decisions and notes:**
+  - Start with `python -m monitor`. It is fixed to 127.0.0.1:5000 with debug off. `flask --app monitor.app run` also works.
+  - **Pages:** Overview, Runs, Filings (filters plus 200 rows per page), Filing detail, Chunk text, Problems, and `/api/status` (JSON used by the auto-refresh).
+  - Supporting pipeline changes:
+    - `runs` records `planned` and `model_tag` (for progress and time left);
+    - `filings.raw_tokens` comes from the audits (for the raw → Markdown → kept token steps; clean files appear with TASK-08);
+    - classify records "N chunks failed and were kept as UNCERTAIN" on the stage row;
+    - `--fake-delay` slows the fake model so progress can be watched;
+    - `[disk] min_free_gb = 50` in `config.toml`.
+  - A run killed without finishing shows as "interrupted?" once it has been idle for 10 minutes.
+  - The monitor tests share one prepared corpus (module fixture) to keep them under a minute.
 
 ### TASK-05 — Converter: extra forms (changes `convertmd.py`; needs user approval of the diff)
 - **Goal:** 10-KSB, 10-KSB405, 10-KT and amendments convert, and no existing output is reconverted.

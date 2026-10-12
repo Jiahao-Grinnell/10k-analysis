@@ -165,8 +165,9 @@ def run(cfg, db, filings: list, client, force: bool = False, run_id: int | None 
             write_record(out["record"], stage=STAGE, stage_version=VERSION, filing_id=filing.filing_id,
                          inputs=inputs, settings=current_settings,
                          outputs=[out["labels"], out["requests"], out["kept"], out["summary"]], started=started)
+            note = f"{summary['failures']} chunks failed and were kept as UNCERTAIN" if summary["failures"] else None
             state.set_stage(db, filing.filing_id, STAGE, "done", model_tag=client.tag, started=started,
-                            finished=now(), tokens_in=tokens_total, tokens_kept=tokens_kept)
+                            finished=now(), tokens_in=tokens_total, tokens_kept=tokens_kept, error=note)
             counts["classified"] += 1
         except Exception as exc:  # one bad filing must not stop the corpus
             error = f"{type(exc).__name__}: {exc}"

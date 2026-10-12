@@ -22,7 +22,7 @@ Shell is PowerShell. Always use the project virtual environment.
 - Verify converted corpus: `& '.\.venv\Scripts\python.exe' verify_outputs.py`
 - Run pipeline: `& '.\.venv\Scripts\python.exe' -m pipeline <command> [--limit N] [--company X] [--year Y] [--filing ID] [--force] [--fake-model]` (commands: scan, convert, segment, classify, compact, publish, all, run, status, select-sample, export-labels, import-labels, evaluate, rebuild-index, verify). Finished filings are skipped automatically; `--force` redoes them; `--fake-model` runs classification without a model. Run `scan` after new filings are added to `10K_Filings/`; `convert --reconvert-changed` rebuilds Markdown only for filings whose raw file changed. Filters also include `--form`.
 - Local models: `& '.\.venv\Scripts\python.exe' -m pipeline models list|fetch|check|serve <name>` (registry in models.toml)
-- Run monitor: `& '.\.venv\Scripts\python.exe' -m flask --app monitor.app run --host 127.0.0.1 --port 5000`
+- Run monitor: `& '.\.venv\Scripts\python.exe' -m monitor` (http://127.0.0.1:5000, local only)
 These pipeline and monitor commands become available as the tasks in TASKS.md are built.
 
 ## Project documents

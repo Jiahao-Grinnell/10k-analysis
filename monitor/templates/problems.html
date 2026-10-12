@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Problems</h1>
+{% macro filing_link(id) %}<a href="/filing?id={{ id | urlencode }}">{{ id }}</a>{% endmacro %}
+
+<h2>Input and conversion <span class="muted">({{ p.input | length }})</span></h2>
+<table><tr><th>Filing</th><th>Scan</th><th>Conversion</th></tr>
+{% for r in p.input %}<tr><td>{{ filing_link(r.filing_id) }}</td><td>{{ r.scan_status }}</td><td>{{ r.conversion_status or '' }}</td></tr>
+{% else %}<tr><td colspan="3" class="muted">None.</td></tr>{% endfor %}</table>
+
+<h2>Failed stages <span class="muted">({{ p.failed | length }})</span></h2>
+<table><tr><th>Filing</th><th>Stage</th><th>Error</th><th>When</th></tr>
+{% for r in p.failed %}<tr><td>{{ filing_link(r.filing_id) }}</td><td>{{ r.stage }}{% if r.model_tag %} [{{ r.model_tag }}]{% endif %}</td><td>{{ r.error }}</td><td class="muted">{{ r.finished }}</td></tr>
+{% else %}<tr><td colspan="4" class="muted">None.</td></tr>{% endfor %}</table>
+
+<h2>Chunks that failed and were kept as UNCERTAIN <span class="muted">({{ p.chunk_failures | length }} filings)</span></h2>
+<table><tr><th>Filing</th><th>Model</th><th>Note</th></tr>
+{% for r in p.chunk_failures %}<tr><td>{{ filing_link(r.filing_id) }}</td><td>{{ r.model_tag }}</td><td>{{ r.error }}</td></tr>
+{% else %}<tr><td colspan="3" class="muted">None.</td></tr>{% endfor %}</table>
+
+<h2>Filings with nothing kept <span class="muted">({{ p.nothing_kept | length }})</span></h2>
+<p class="muted">Not evidence of zero intangible investment — review these.</p>
+<table><tr><th>Filing</th><th>Model</th><th class="num">Tokens read</th></tr>
+{% for r in p.nothing_kept %}<tr><td>{{ filing_link(r.filing_id) }}</td><td>{{ r.model_tag }}</td><td class="num">{{ r.tokens_in | n }}</td></tr>
+{% else %}<tr><td colspan="3" class="muted">None.</td></tr>{% endfor %}</table>
+
+<h2>Running or interrupted <span class="muted">({{ p.interrupted | length }})</span></h2>
+<p class="muted">Filings left in "running" by a stopped run are redone by the next run.</p>
+<table><tr><th>Filing</th><th>Stage</th><th>Started</th></tr>
+{% for r in p.interrupted %}<tr><td>{{ filing_link(r.filing_id) }}</td><td>{{ r.stage }}{% if r.model_tag %} [{{ r.model_tag }}]{% endif %}</td><td class="muted">{{ r.started }}</td></tr>
+{% else %}<tr><td colspan="3" class="muted">None.</td></tr>{% endfor %}</table>
+
+<h2>Compaction fallbacks</h2>
+<p class="muted">Available once compaction exists (TASK-08).</p>
+{% endblock %}

@@ -15,9 +15,10 @@ FILING_COLUMNS = {
     "period": "TEXT", "is_amendment": "INTEGER", "amends_filing_id": "TEXT", "raw_path": "TEXT",
     "markdown_path": "TEXT", "raw_sha256": "TEXT", "manifest_json": "TEXT", "scan_status": "TEXT",
     "first_seen": "TEXT", "last_seen": "TEXT",
-    "conversion_status": "TEXT", "raw_format": "TEXT", "markdown_tokens": "INTEGER",
+    "conversion_status": "TEXT", "raw_format": "TEXT", "markdown_tokens": "INTEGER", "raw_tokens": "INTEGER",
 }
-REGISTRY_FIELDS = [c for c in FILING_COLUMNS if c not in {"conversion_status", "raw_format", "markdown_tokens"}]
+REGISTRY_FIELDS = [c for c in FILING_COLUMNS
+                   if c not in {"conversion_status", "raw_format", "markdown_tokens", "raw_tokens"}]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS filings (""" + ", ".join(f"{k} {v}" for k, v in FILING_COLUMNS.items()) + """);
@@ -27,7 +28,7 @@ CREATE TABLE IF NOT EXISTS stage_status (
     error TEXT, PRIMARY KEY (filing_id, stage, model_tag));
 CREATE TABLE IF NOT EXISTS runs (
     run_id INTEGER PRIMARY KEY AUTOINCREMENT, command TEXT, args TEXT, started TEXT,
-    finished TEXT, exit_code INTEGER);
+    finished TEXT, exit_code INTEGER, planned INTEGER, model_tag TEXT);
 CREATE TABLE IF NOT EXISTS progress (
     run_id INTEGER PRIMARY KEY, filing_id TEXT, chunks_done INTEGER, chunks_total INTEGER,
     updated_at TEXT);
@@ -46,6 +47,10 @@ def _migrate(connection: sqlite3.Connection) -> None:
     for name, kind in FILING_COLUMNS.items():
         if name not in existing:
             connection.execute(f"ALTER TABLE filings ADD COLUMN {name} {kind.replace(' PRIMARY KEY', '')}")
+    run_columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
+    for name, kind in {"planned": "INTEGER", "model_tag": "TEXT"}.items():
+        if name not in run_columns:
+            connection.execute(f"ALTER TABLE runs ADD COLUMN {name} {kind}")
     connection.executescript(INDEXES)
 
 
@@ -71,9 +76,9 @@ def register(db: sqlite3.Connection, values: dict) -> None:
 
 
 def set_conversion(db: sqlite3.Connection, filing_id: str, status: str, raw_format: str | None,
-                   markdown_tokens: int | None) -> None:
-    db.execute("UPDATE filings SET conversion_status=?, raw_format=?, markdown_tokens=? WHERE filing_id=?",
-               (status, raw_format, markdown_tokens, filing_id))
+                   markdown_tokens: int | None, raw_tokens: int | None = None) -> None:
+    db.execute("UPDATE filings SET conversion_status=?, raw_format=?, markdown_tokens=?, raw_tokens=? WHERE filing_id=?",
+               (status, raw_format, markdown_tokens, raw_tokens, filing_id))
 
 
 def set_stage(db: sqlite3.Connection, filing_id: str, stage: str, status: str, *, model_tag: str = "",
@@ -87,9 +92,11 @@ def set_stage(db: sqlite3.Connection, filing_id: str, stage: str, status: str, *
         (filing_id, stage, model_tag, status, started, finished, tokens_in, tokens_kept, error))
 
 
-def start_run(db: sqlite3.Connection, command: str, args: dict) -> int:
-    cursor = db.execute("INSERT INTO runs (command, args, started) VALUES (?,?,?)",
-                        (command, json.dumps(args, default=str), now()))
+def start_run(db: sqlite3.Connection, command: str, args: dict, planned: int | None = None,
+              model_tag: str = "") -> int:
+    """`planned` is the number of filings selected, used by the monitor for progress and time left."""
+    cursor = db.execute("INSERT INTO runs (command, args, started, planned, model_tag) VALUES (?,?,?,?,?)",
+                        (command, json.dumps(args, default=str), now(), planned, model_tag))
     db.commit()
     return cursor.lastrowid
 

@@ -55,7 +55,7 @@ def cmd_convert(cfg, args) -> int:
     from pipeline import convert_stage
     filings = _selected(cfg, args)
     with closing(state.connect(cfg.db_path)) as db:
-        run_id = state.start_run(db, "convert", _args(args))
+        run_id = state.start_run(db, "convert", _args(args), planned=len(filings))
         print(f"convert: {len(filings)} filings (existing Markdown is indexed, never rewritten)", flush=True)
         result = convert_stage.run(cfg, db, filings, reconvert_changed=getattr(args, "reconvert_changed", False))
         code = 1 if result["errors"] else 0
@@ -68,7 +68,7 @@ def cmd_segment(cfg, args) -> int:
     from pipeline.segment import stage as segment_stage
     filings = _selected(cfg, args)
     with closing(state.connect(cfg.db_path)) as db:
-        run_id = state.start_run(db, "segment", _args(args))
+        run_id = state.start_run(db, "segment", _args(args), planned=len(filings))
         print(f"segment: {len(filings)} filings (finished filings are skipped unless --force)", flush=True)
         result = segment_stage.run(cfg, db, filings, force=args.force)
         code = 1 if result["failures"] else 0
@@ -80,9 +80,9 @@ def cmd_segment(cfg, args) -> int:
 def cmd_classify(cfg, args, client=None) -> int:
     from pipeline.classify import client as clients, stage as classify_stage
     filings = _selected(cfg, args)
-    client = client or clients.from_config(cfg, fake=args.fake_model)
+    client = client or clients.from_config(cfg, fake=args.fake_model, fake_delay=args.fake_delay)
     with closing(state.connect(cfg.db_path)) as db:
-        run_id = state.start_run(db, "classify", _args(args))
+        run_id = state.start_run(db, "classify", _args(args), planned=len(filings), model_tag=client.tag)
         print(f"classify: {len(filings)} filings with model '{client.tag}', one filing at a time", flush=True)
         try:
             result = classify_stage.run(cfg, db, filings, client, force=args.force, run_id=run_id)
@@ -97,7 +97,7 @@ def cmd_classify(cfg, args, client=None) -> int:
 
 def cmd_all(cfg, args) -> int:
     from pipeline.classify import client as clients
-    client = clients.from_config(cfg, fake=args.fake_model)  # fail early if no model is configured
+    client = clients.from_config(cfg, fake=args.fake_model, fake_delay=args.fake_delay)  # fail early if no model is configured
     cmd_scan(cfg, args)  # pick up filings added to 10K_Filings/ since the last scan
     codes = [cmd_convert(cfg, args), cmd_segment(cfg, args), cmd_classify(cfg, args, client)]
     return max(codes)
@@ -171,6 +171,8 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--force", action="store_true", help="Redo filings that are already done")
         command.add_argument("--fake-model", action="store_true",
                              help="Use the test stand-in instead of a local model (labels everything UNCERTAIN)")
+        command.add_argument("--fake-delay", type=float, default=0.0,
+                             help="Seconds per fake request, to watch progress in the monitor")
         command.set_defaults(func=func)
     sub.add_parser("status", help="Show per-stage counts").set_defaults(func=cmd_status)
     sub.add_parser("rebuild-index", help="Recreate the status database from files").set_defaults(func=cmd_rebuild_index)

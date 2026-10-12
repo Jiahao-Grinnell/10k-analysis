@@ -32,6 +32,7 @@ class Config:
     tiktoken_cache: Path
     vram_budget_mib: int
     chunk_max_tokens: int
+    min_free_gb: float
     classify: dict
     data: dict
 
@@ -56,6 +57,7 @@ def load(path: Path | str | None = None) -> Config:
         tiktoken_cache=(base / tokens.get("cache_dir", ".cache/tiktoken")).resolve(),
         vram_budget_mib=int(data.get("gpu", {}).get("vram_budget_mib", 14336)),
         chunk_max_tokens=int(data.get("segment", {}).get("chunk_max_tokens", 2000)),
+        min_free_gb=float(data.get("disk", {}).get("min_free_gb", 50)),
         classify={**CLASSIFY_DEFAULTS, **data.get("classify", {}),
                   "prompts_dir": str((base / data.get("classify", {}).get("prompts_dir", "prompts")).resolve())},
         data=data,

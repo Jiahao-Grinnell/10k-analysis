@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Filings <span class="muted">({{ r.total | n }})</span></h1>
+<form class="filters" method="get">
+  <input name="q" value="{{ args.q }}" placeholder="ticker, company, CIK or filing ID">
+  <input name="year" value="{{ args.year }}" placeholder="year" size="6">
+  <input name="form" value="{{ args.form }}" placeholder="form, e.g. 10-K405" size="12">
+  <select name="stage">
+    <option value="">any stage</option>
+    {% for s in ['convert', 'segment', 'classify'] %}<option {{ 'selected' if args.stage == s }}>{{ s }}</option>{% endfor %}
+  </select>
+  <select name="status">
+    <option value="">any status</option>
+    {% for s in ['done', 'running', 'failed', 'source_incomplete', 'missing_source', 'pending', 'skipped', 'waiting', 'not started'] %}
+    <option {{ 'selected' if args.status == s }}>{{ s }}</option>{% endfor %}
+  </select>
+  <button>Filter</button>
+</form>
+<table>
+  <tr><th>Filing</th><th>Company</th><th class="num">Year</th><th>Form</th><th>Conversion</th><th class="num">Markdown tokens</th><th>Stages</th></tr>
+  {% for f in r.rows %}
+  <tr>
+    <td><a href="/filing?id={{ f.filing_id | urlencode }}">{{ f.filing_id.split('/')[-1] }}</a></td>
+    <td>{{ f.ticker }} <span class="muted">{{ f.company_dir }}</span></td>
+    <td class="num">{{ f.year or '' }}</td>
+    <td>{{ f.form }}{% if f.is_amendment %} <span class="pill warn">amendment</span>{% endif %}</td>
+    <td>{{ f.conversion_status or 'not converted' }}</td>
+    <td class="num">{{ f.markdown_tokens | n }}</td>
+    <td>{% for label, status in f.stages %}<span class="pill {{ 'bad' if status == 'failed' }}">{{ label }}: {{ status }}</span>{% endfor %}</td>
+  </tr>
+  {% else %}<tr><td colspan="7" class="muted">No filings match.</td></tr>{% endfor %}
+</table>
+{% if r.pages > 1 %}
+<p>Page {{ r.page }} of {{ r.pages }} ·
+  {% set base = '/filings?q=' ~ (args.q | urlencode) ~ '&year=' ~ (args.year | urlencode) ~ '&form=' ~ (args.form | urlencode) ~ '&stage=' ~ (args.stage | urlencode) ~ '&status=' ~ (args.status | urlencode) %}
+  {% if r.page > 1 %}<a href="{{ base }}&page={{ r.page - 1 }}">previous</a>{% endif %}
+  {% if r.page < r.pages %}<a href="{{ base }}&page={{ r.page + 1 }}">next</a>{% endif %}
+</p>
+{% endif %}
+{% endblock %}

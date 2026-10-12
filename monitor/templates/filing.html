@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ d.filing.filing_id }}{% endblock %}
+{% block body %}
+{% set f = d.filing %}
+<h1>{{ f.filing_id }}</h1>
+<div class="grid">
+  <div class="card"><div class="k">Company</div><div>{{ f.ticker }} · {{ f.company_dir }}</div><div class="muted">CIK {{ f.cik or '–' }}</div></div>
+  <div class="card"><div class="k">Form / period</div><div>{{ f.form }}{% if f.is_amendment %} <span class="pill warn">amendment</span>{% endif %} · {{ f.period or f.year }}</div>
+    <div class="muted">filed {{ f.filing_date or '–' }} · accession {{ f.accession or '–' }}</div>
+    {% if f.amends_filing_id %}<div class="muted">amends <a href="/filing?id={{ f.amends_filing_id | urlencode }}">{{ f.amends_filing_id }}</a></div>{% endif %}</div>
+  <div class="card"><div class="k">Source</div><div>{{ f.raw_path }}</div><div class="muted">scan: {{ f.scan_status }} · conversion: {{ f.conversion_status or 'not converted' }} · {{ f.raw_format or '' }}</div></div>
+</div>
+
+<h2>Tokens by step</h2>
+<table>
+  <tr>{% for name, value in d.tokens %}<th class="num">{{ name }}</th>{% endfor %}</tr>
+  <tr>{% for name, value in d.tokens %}<td class="num">{{ value | n }}</td>{% endfor %}</tr>
+</table>
+
+<h2>Stages</h2>
+<table>
+  <tr><th>Stage</th><th>Status</th><th>Started</th><th>Finished</th><th class="num">Tokens in</th><th class="num">Tokens kept</th><th>Note / error</th></tr>
+  {% for s in d.stages %}
+  <tr><td>{{ s.stage }}{% if s.model_tag %} [{{ s.model_tag }}]{% endif %}</td>
+      <td class="{{ 'bad' if s.status == 'failed' else '' }}">{{ s.status }}</td>
+      <td class="muted">{{ s.started or '' }}</td><td class="muted">{{ s.finished or '' }}</td>
+      <td class="num">{{ s.tokens_in | n }}</td><td class="num">{{ s.tokens_kept | n }}</td><td>{{ s.error or '' }}</td></tr>
+  {% endfor %}
+</table>
+
+<h2>Chunks <span class="muted">({{ d.chunks | length }})</span></h2>
+{% if d.models | length > 1 %}
+<p>Model: {% for m in d.models %}<a class="pill" href="/filing?id={{ f.filing_id | urlencode }}&model={{ m | urlencode }}">{{ m }}{{ ' ✓' if m == d.model }}</a>{% endfor %}</p>
+{% endif %}
+{% if d.chunks %}
+<table>
+  <tr><th>Chunk</th><th>Location</th><th>Kind</th><th class="num">Tokens</th><th>Label</th><th>Decided by</th><th>Reason / error</th></tr>
+  {% for c in d.chunks %}
+  {% set l = c.label %}
+  <tr>
+    <td><a href="/chunk?id={{ f.filing_id | urlencode }}&chunk={{ c.chunk_id }}{% if d.model %}&model={{ d.model | urlencode }}{% endif %}">{{ c.chunk_id }}</a></td>
+    <td>{{ c.heading_path | join(' > ') }}</td>
+    <td class="muted">{{ c.kind }}</td>
+    <td class="num">{{ c.tokens | n }}</td>
+    <td class="{{ 'muted' if l and l.final_label == 'DROP' else '' }}">{{ l.final_label if l else '–' }}</td>
+    <td class="muted">{{ l.kept_by if l else '' }}</td>
+    <td>{% if l %}{{ l.reason }}{% if l.error %} <span class="bad">{{ l.error }}</span>{% endif %}{% endif %}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}<p class="muted">Not segmented yet.</p>{% endif %}
+{% endblock %}

@@ -19,15 +19,15 @@ from pipeline.records import now, read_json, sha256_file, write_json
 STAGE = "convert"
 
 
-def _from_audit(filing, encoding: str) -> tuple[str, str | None, int | None, str | None]:
-    """(conversion_status, raw_format, markdown_tokens, error) for a filing with existing outputs."""
+def _from_audit(filing, encoding: str) -> tuple[str, str | None, int | None, str | None, int | None]:
+    """(conversion_status, raw_format, markdown_tokens, error, raw_tokens) for a filing with existing outputs."""
     report = read_json(filing.audit_path)
     if report.get("markdown_sha256") != sha256_file(filing.markdown_path):
-        return "ERROR", None, None, "Markdown hash differs from its audit record; not rewritten"
+        return "ERROR", None, None, "Markdown hash differs from its audit record; not rewritten", None
     documents = report.get("documents") or []
     raw_format = documents[0].get("format") if documents else None
-    markdown_tokens = report.get("tokens", {}).get(encoding, {}).get("markdown")
-    return report.get("quality_status", "ERROR"), raw_format, markdown_tokens, None
+    counts = report.get("tokens", {}).get(encoding, {})
+    return report.get("quality_status", "ERROR"), raw_format, counts.get("markdown"), None, counts.get("raw_source")
 
 
 def _source_changed(filing) -> bool:
@@ -55,7 +55,7 @@ def run(cfg, db, filings: list, convert_missing: bool = True, reconvert_changed:
         return _from_audit(filing, next(iter(tokenizers)))
 
     for index, filing in enumerate(filings, 1):
-        started = now()
+        started, raw_tokens = now(), None
         md_exists, audit_exists = filing.markdown_path.is_file(), filing.audit_path.is_file()
         try:
             if filing.scan_status == "missing_source" or not filing.raw_path.is_file():
@@ -63,10 +63,10 @@ def run(cfg, db, filings: list, convert_missing: bool = True, reconvert_changed:
                 error = "Raw file listed in filings.csv is missing"
             elif md_exists and audit_exists:
                 if not _source_changed(filing):
-                    status, raw_format, md_tokens, error = _from_audit(filing, cfg.encoding)
+                    status, raw_format, md_tokens, error, raw_tokens = _from_audit(filing, cfg.encoding)
                     action = "indexed"
                 elif reconvert_changed:
-                    status, raw_format, md_tokens, error = convert(filing)
+                    status, raw_format, md_tokens, error, raw_tokens = convert(filing)
                     action = "reconverted"
                 else:
                     status, raw_format, md_tokens, action = "ERROR", None, None, "indexed"
@@ -76,7 +76,7 @@ def run(cfg, db, filings: list, convert_missing: bool = True, reconvert_changed:
                 error = "Partial conversion output (Markdown or audit missing); not rewritten"
                 action = "indexed"
             elif convert_missing:
-                status, raw_format, md_tokens, error = convert(filing)
+                status, raw_format, md_tokens, error, raw_tokens = convert(filing)
                 action = "converted"
             else:
                 status, raw_format, md_tokens, error, action = "MISSING", None, None, "Not converted yet", "indexed"
@@ -85,7 +85,7 @@ def run(cfg, db, filings: list, convert_missing: bool = True, reconvert_changed:
             error = f"{type(exc).__name__}: {exc}"
         stage_status = {"SOURCE_INCOMPLETE": "source_incomplete", "MISSING": "pending",
                         "MISSING_SOURCE": "missing_source"}.get(status, "done" if status in CONVERTED else "failed")
-        state.set_conversion(db, filing.filing_id, status, raw_format, md_tokens)
+        state.set_conversion(db, filing.filing_id, status, raw_format, md_tokens, raw_tokens)
         state.set_stage(db, filing.filing_id, STAGE, stage_status, started=started, finished=now(),
                         tokens_in=md_tokens, error=error)
         rows.append({"filing_id": filing.filing_id, "action": action, "conversion_status": status,

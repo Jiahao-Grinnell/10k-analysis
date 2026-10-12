@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block autorefresh %}{{ 'active' if active else 'idle' }}{% endblock %}
+{% block body %}
+<h1>Runs</h1>
+<div class="grid">
+{% for r in runs %}{% include "_run.html" %}{% else %}<p class="muted">No runs yet.</p>{% endfor %}
+</div>
+{% endblock %}

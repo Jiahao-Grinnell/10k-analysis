@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block title %}{{ error.code }} · Pipeline monitor{% endblock %}
+{% block body %}
+<h1>{{ error.code }} — {{ error.name }}</h1>
+<p>{{ error.description }}</p>
+<p><a href="/">Back to overview</a></p>
+{% endblock %}

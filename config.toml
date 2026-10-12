@@ -27,6 +27,9 @@ prompts_dir = "prompts"
 [classify.chat_template_kwargs]
 enable_thinking = false
 
+[disk]
+min_free_gb = 50                 # monitor warns below this; long runs will pause (TASK-12)
+
 [gpu]
 # 16,376 MiB physical; keep headroom for Windows and the display.
 vram_budget_mib = 14336

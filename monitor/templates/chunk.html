@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}{{ c.chunk.chunk_id }} · {{ c.filing_id }}{% endblock %}
+{% block body %}
+<p><a href="/filing?id={{ c.filing_id | urlencode }}{% if c.model %}&model={{ c.model | urlencode }}{% endif %}">← {{ c.filing_id }}</a></p>
+<h1>{{ c.chunk.chunk_id }} <span class="muted">{{ c.chunk.heading_path | join(' > ') }}</span></h1>
+<p class="muted">Characters {{ c.chunk.start | n }}–{{ c.chunk.end | n }} of the Markdown · {{ c.chunk.tokens | n }} tokens · {{ c.chunk.kind }}
+  {% if c.chunk.label %} · <b>{{ c.chunk.label.final_label }}</b> ({{ c.chunk.label.kept_by }}) — {{ c.chunk.label.reason }}{% endif %}</p>
+<pre class="text">{{ c.text }}</pre>
+{% endblock %}
