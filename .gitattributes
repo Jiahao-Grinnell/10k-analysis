@@ -1,0 +1,5 @@
+# Keep LF line endings in the working copy. convertmd.py's CODE_HASH is a hash of
+# the file bytes; a CRLF rewrite on checkout would invalidate --resume for the whole corpus.
+* text=auto eol=lf
+*.xlsx binary
+*.gguf binary

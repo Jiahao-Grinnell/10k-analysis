@@ -1,0 +1,20 @@
+.venv/
+.cache/
+__pycache__/
+.pytest_cache/
+10K_Filings/
+Markdown_10K/
+test_outputs/
+
+# pipeline outputs and runtime state
+outputs/
+runs/
+
+# local model server and weights
+tools/
+models/
+*.gguf
+
+# secrets and local tool settings
+.env
+.claude/settings.local.json
