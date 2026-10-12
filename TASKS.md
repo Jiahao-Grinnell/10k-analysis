@@ -7,7 +7,7 @@ Status flow: todo → in progress → ready for review → done (or blocked)
 ## Protected throughout Iteration 1
 
 These must not change during any task:
-- `convertmd.py` is unchanged, byte for byte (SHA-256 `c02774c2…3823`). The one exception is TASK-05, which changes only `FORMS`, `VERSION` and `COMPATIBLE_CHECKED_HASHES` after the user approves the diff, and must reuse every existing output.
+- `convertmd.py` is not edited, except for the approved TASK-05 change (`FORMS`, `VERSION`, `COMPATIBLE_CHECKED_HASHES`; now 1.2.0, SHA-256 `1512c2b63d4a…`). Any further change needs the user's approval and must keep reusing every existing output.
 - `10K_Filings/` and the existing files in `Markdown_10K/` are never modified.
 - All 24 existing tests in `tests/test_conversion.py` keep passing.
 - No request to a model ever contains text from more than one filing.
@@ -208,7 +208,28 @@ The tasks below replace the earlier TASK-03 to TASK-08.
   - `verify_outputs.py` passes.
   - All existing tests pass.
 - **Tests to add:** `test_conversion_forms.py` (per-form fixtures, compatible-hash resume).
-- **Status:** todo
+- **Status:** done (the user approved the diff and asked to commit and push on 2026-10-12)
+- **Verification (2026-10-12):**
+  - **`convertmd.py` is now 1.2.0** (SHA-256 `1512c2b63d4a…`). Only `VERSION`, `COMPATIBLE_CHECKED_HASHES` (adds the 1.1 hash `c02774c2…`) and `FORMS` changed. `verify_outputs.py` now accepts outputs whose converter, and whoever verified them, is current or in the compatible set.
+  - `pytest -q`: 78 passed. The 11 new tests in `test_conversion_forms.py` cover:
+    - 10-KSB, 10-KSB405, 10-KT, 10-KT405, 10-K/A, 10-KSB/A and 10-KT/A convert to CHECKED_TEXT;
+    - 20-F still counts as "no annual report";
+    - a 1.1 output is reused under `--resume` with its Markdown unchanged;
+    - `verify()` accepts 1.0 and 1.1 outputs and rejects an unknown converter;
+    - a 10-KSB goes through scan → convert → segment → classify.
+  - **Development corpus:**
+    - `verify()` passes (2,896 audits, 0 problems). It was called as a function, so `Markdown_10K/corpus_validation.json` was not rewritten.
+    - The `--resume` dry run with the new compatible set: 2,894 reused, 2 placeholders would be regenerated with identical text.
+    - `pipeline convert`: 0 newly converted, 588,352,290 tokens.
+    - All 5,798 files in `Markdown_10K/` have the same size and modification time before and after.
+- **Findings before the change (read-only):**
+  - **Form types present today:** the development corpus contains only 10-K (2,713) and 10-K405 (183) filings. A raw-file search found no `<TYPE>10-KSB` or `<TYPE>10-KT` documents, so widening `FORMS` cannot change any existing conversion.
+  - **Audit hashes:** 2,891 audits have `converter_sha256` = v1.0 (`6f5ee1ee…`) with `verified_by` = v1.1. The other 5 were converted by v1.1 (`c02774c2…`).
+  - **Dry-run of `--resume` with the proposed compatible set** (script in the session scratchpad, no writes):
+    - 2,894 outputs would be reused;
+    - 2 SOURCE_INCOMPLETE placeholders would be regenerated with identical text, because placeholders have no document checks.
+    - The pipeline's own convert stage never re-runs the converter on existing outputs.
+  - **Placeholder message:** the `IncompleteSource` text "no 10-K/10-K405 primary document" is deliberately left unchanged, so regenerated placeholders stay byte-identical.
 
 ### TASK-06 — Structural segmentation (Part → Item → subsection → note → table)
 - **Goal:** Replace the single `UNSTRUCTURED` section with real document structure for all raw formats and forms, without ever using keywords for relevance.

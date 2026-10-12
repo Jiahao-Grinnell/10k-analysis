@@ -27,14 +27,17 @@ import mistune
 import tiktoken
 
 ROOT = Path(__file__).resolve().parent
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 CODE_HASH = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 # Version 1.0's outputs can be reused only when all preservation checks passed.
 # The 1.1 fixes affect missing primary documents and already-failed HTML output.
+# 1.2 only widens the accepted form types; outputs checked under 1.0/1.1 stay valid.
 # Keep the actual conversion hash; separately record verification by this version.
-COMPATIBLE_CHECKED_HASHES = {"6f5ee1eec9b012f1215dfd777260fcaa7cb4176943fcdb223fd0b67451ee3c12"}
+COMPATIBLE_CHECKED_HASHES = {"6f5ee1eec9b012f1215dfd777260fcaa7cb4176943fcdb223fd0b67451ee3c12",
+                             "c02774c21ee991597e7394b31650354b33b9f872266bf4cacd16ec1deb9b3823"}
 SUPPORTED = {".htm", ".html", ".txt", ".sgml", ".sgm"}
-FORMS = {"10-K", "10-K405", "10-K/A", "10-K405/A"}
+FORMS = {"10-K", "10-K405", "10-KSB", "10-KSB405", "10-KT", "10-KT405",
+         "10-K/A", "10-K405/A", "10-KSB/A", "10-KSB405/A", "10-KT/A", "10-KT405/A"}
 BLOCKS = {"p", "div", "section", "article", "header", "footer", "blockquote",
           "li", "ul", "ol", "dl", "dt", "dd", "h1", "h2", "h3", "h4", "h5", "h6"}
 TECHNICAL = {"head", "script", "style", "ix:header", "ix:hidden", "xbrli:xbrl",

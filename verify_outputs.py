@@ -28,10 +28,12 @@ def verify(input_path: Path, output: Path) -> dict:
             "Raw source hash matches audit": raw_hash == report["source_sha256"],
             "Raw source hash matches download manifest": not metadata.get("sha256") or raw_hash == metadata["sha256"],
             "Markdown hash matches audit": digest(destination.read_bytes()) == report["markdown_sha256"],
+            # Outputs from a compatible earlier converter stay valid; if they were reused under
+            # resume, the version that verified them must itself be current or compatible.
             "Converter code hash matches audit": (report["converter_sha256"] == CODE_HASH
                 or report["converter_sha256"] in COMPATIBLE_CHECKED_HASHES
-                and report.get("compatible_converter_reuse")
-                and report.get("verified_by_converter_sha256") == CODE_HASH),
+                and (not report.get("compatible_converter_reuse")
+                     or report.get("verified_by_converter_sha256") in COMPATIBLE_CHECKED_HASHES | {CODE_HASH})),
         }
         for name, passed in checks.items():
             if not passed:
