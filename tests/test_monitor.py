@@ -35,7 +35,15 @@ def test_every_page_renders(client):
     overview = page(client, "/")
     assert "Filings registered" in overview and "segment" in overview and "Tokens by step" in overview
     assert "kept by filter [fake]" in overview
-    assert "Run #" in page(client, "/runs")
+    runs = page(client, "/runs")
+    assert "History" in runs and "all registered filings · fake model" in runs and "Finished" in runs
+    assert runs.count('class="job-row"') == 1  # scan + convert + segment + classify shown as one action
+    structure = page(client, f"/structure?id={FILING}")
+    assert "Document map" in structure and "Outline" in structure and "PART I" in structure
+    assert "c00001" in structure and "lbl-uncertain" in structure  # chunk links and fake-model labels
+    page(client, "/structure?id=nope", 404)
+    assert "not been segmented" in page(client, "/structure?id=BBB_Beta_Corp/1993_c")
+    assert 'href="/structure?id=' in page(client, "/filings")
     assert "AAA_Alpha_Inc" in page(client, "/filings")
     assert "Failed stages" in page(client, "/problems")
     detail = page(client, f"/filing?id={FILING}")
@@ -104,7 +112,8 @@ def test_active_run_progress_and_problems(client, processed):
         state.set_stage(db, FILING, "classify", "done", model_tag="fake", tokens_in=100, tokens_kept=0)
         db.commit()
     overview = page(client, "/")
-    assert f"Run #{run_id}" in overview and "Current filing" in overview and "chunk <span" in overview
+    assert "Running now" in overview and "Current filing" in overview and 'data-field="chunks_done">2<' in overview
+    assert "Running now" in page(client, "/runs")
     active = client.get("/api/status").get_json()["active"]
     assert active["run_id"] == run_id and active["chunk"]["chunks_done"] == 2 and active["planned"] == 3
     problems = page(client, "/problems")

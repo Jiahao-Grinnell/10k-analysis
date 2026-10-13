@@ -1,0 +1,117 @@
+{
+ "filing_id": "AAPL_Apple_Inc_CIK0000320193/1996_1996-12-19_0000320193-96-000023",
+ "why": "legacy fixed-width, <=2000, prose cross-references",
+ "review": "checked by the assistant against the Markdown on 2026-10-12; awaiting user confirmation",
+ "quality": "HIGH",
+ "headings": [
+  [
+   "part",
+   "I",
+   2882,
+   "PART I"
+  ],
+  [
+   "item",
+   "1",
+   2890,
+   "Item 1. Business"
+  ],
+  [
+   "item",
+   "2",
+   26870,
+   "Item 2. Properties"
+  ],
+  [
+   "item",
+   "3",
+   29933,
+   "Item 3. Legal Proceedings"
+  ],
+  [
+   "item",
+   "4",
+   30204,
+   "Item 4. Submission of Matters to a Vote of Security Holders"
+  ],
+  [
+   "part",
+   "II",
+   39780,
+   "PART II"
+  ],
+  [
+   "item",
+   "5",
+   39789,
+   "Item 5. Market for the Registrant's Common Equity and Related"
+  ],
+  [
+   "item",
+   "6",
+   40537,
+   "Item 6. Selected Financial Data"
+  ],
+  [
+   "item",
+   "7",
+   41921,
+   "Item 7. Management's Discussion and Analysis of Financial Condition"
+  ],
+  [
+   "item",
+   "8",
+   97501,
+   "Item 8. Financial Statements and Supplementary Data"
+  ],
+  [
+   "item",
+   "9",
+   172440,
+   "Item 9. Changes in and Disagreements with Accountants on"
+  ],
+  [
+   "part",
+   "III",
+   172566,
+   "PART III"
+  ],
+  [
+   "item",
+   "10",
+   172576,
+   "Item 10. Directors and Executive Officers of the Registrant"
+  ],
+  [
+   "item",
+   "11",
+   173093,
+   "Item 11. Executive Compensation"
+  ],
+  [
+   "item",
+   "12",
+   173654,
+   "Item 12. Security Ownership of Certain Beneficial Owners and"
+  ],
+  [
+   "item",
+   "13",
+   174035,
+   "Item 13. Certain Relationships and Related Transactions"
+  ],
+  [
+   "part",
+   "IV",
+   174623,
+   "PART IV"
+  ],
+  [
+   "item",
+   "14",
+   174633,
+   "Item 14. Exhibits, Financial Statement Schedules, and Reports on"
+  ]
+ ],
+ "notes": []
+}

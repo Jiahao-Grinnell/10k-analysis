@@ -1,8 +1,45 @@
 {% extends "base.html" %}
 {% block autorefresh %}{{ 'active' if active else 'idle' }}{% endblock %}
+{% block title %}Runs · Pipeline monitor{% endblock %}
 {% block body %}
 <h1>Runs</h1>
-<div class="grid">
-{% for r in runs %}{% include "_run.html" %}{% else %}<p class="muted">No runs yet.</p>{% endfor %}
-</div>
+{% if active %}{% with job = active %}{% include "_job.html" %}{% endwith %}
+{% else %}<p class="muted">Nothing is running. <a href="/control">Start processing</a></p>{% endif %}
+
+<h2>History</h2>
+<p class="muted">One row per action: pressing Start (or running <code>pipeline all</code>) runs four steps — scan, convert, segment, filter. Click a row for the details of each step.</p>
+<table class="jobs">
+  <tr><th>#</th><th>Started</th><th>What was processed</th><th>Steps</th><th>Result</th><th class="num">Duration</th></tr>
+  {% for job in jobs %}
+  <tr class="job-row">
+    <td class="muted">{{ job.id }}</td>
+    <td class="nowrap">{{ job.started }}</td>
+    <td>{{ job.selection }}{% if job.model %} <span class="muted">· {{ job.model }}</span>{% endif %}
+      {% if job.kind != 'all' %}<span class="pill">{{ job.kind }} only</span>{% endif %}</td>
+    <td class="nowrap">
+      {% for s in job.steps if s.command != 'all' %}
+        <span class="chip {{ 'chip-ok' if s.state == 'finished' else 'chip-warn' if s.state in ['stopped on request', 'interrupted?'] else 'chip-bad' if s.state == 'interrupted' else 'chip-run' }}"
+              title="{{ s.name }}: {{ s.state }}">{{ s.name }}{% if s.planned %} {{ s.completed | n }}/{{ s.planned | n }}{% endif %}</span>
+      {% endfor %}
+    </td>
+    <td><span class="pill {{ job.result_label[1] }}">{{ job.result_label[0] }}</span></td>
+    <td class="num nowrap">{{ job.duration | duration }}</td>
+  </tr>
+  <tr class="job-detail"><td></td><td colspan="5">
+    <details><summary class="muted">step details</summary>
+      <table class="inner">
+        <tr><th>Step</th><th>Started</th><th>Finished</th><th class="num">Filings</th><th>Outcome</th><th class="num">Run #</th></tr>
+        {% for s in job.steps %}
+        <tr><td>{{ s.name }}</td><td>{{ s.started_local }}</td><td>{{ s.finished_local or '–' }}</td>
+            <td class="num">{% if s.planned %}{{ s.completed | n }} / {{ s.planned | n }}{% else %}–{% endif %}</td>
+            <td>{{ s.state }}{% if s.exit_code not in [none, 0] %} <span class="muted">(exit {{ s.exit_code }})</span>{% endif %}</td>
+            <td class="num muted">{{ s.run_id }}</td></tr>
+        {% endfor %}
+      </table>
+    </details>
+  </td></tr>
+  {% else %}<tr><td colspan="6" class="muted">No runs yet.</td></tr>{% endfor %}
+</table>
+<p class="muted">Results: <b>Finished</b> — all selected filings done · <b>Stopped on request</b> — “Stop after current filing” was pressed; press Start again to continue ·
+  <b>Interrupted</b> — the process ended early (force stop, crash, window closed); the unfinished filing is redone next time.</p>
 {% endblock %}

@@ -117,6 +117,32 @@ Segmentation has two layers: logical **sections** (what gets kept or dropped) an
 
 Each chunk record contains: `filing_id`, `chunk_id`, `section_id`, `heading_path`, `item`, `start`, `end`, `tokens`, `kind`, `quality`, and fence flags.
 
+**As built in TASK-06 (segment-2).** These points replace steps 2–6 above where they differ.
+- **Heading candidates come from the Markdown alone.** Raw-HTML formatting hints were not needed: on the development corpus the Markdown gives complete structure for 97.7% of filings. The candidates are:
+  - short standalone paragraphs;
+  - tiny heading tables (at most one row with text; spacer rows are common);
+  - paragraph-level pieces inside HTML blocks, including `<br>`-delimited lines in minimal-HTML fallback bodies;
+  - paragraph-starting lines inside fenced legacy text.
+- **Tables of contents** are recognized in three ways:
+  - tables that list three or more different Items;
+  - short Item lines that end in a page number;
+  - an increasing run of closely spaced Item lines (< 400 characters apart) that covers both an early Item (< 5) and a late one (≥ 7). A step back in numbering ends the run.
+- **Other non-boundaries:** "Continued" page headers are skipped. For repeated headings, the first occurrence counts. The final Item list is the longest strictly increasing chain.
+- **Notes:**
+  - They are looked for inside the financial-statements Item (Item 8; Item 7 for 10-KSB). If none are found there, the search runs from that Item to the end of the document (F-pages after Item 15). In EX-13, the whole exhibit is searched.
+  - A notes sequence must start at 1 or 2, have at least 3 notes, and have a median gap of at least 800 characters between notes, which rejects numbered lists such as "1. Financial Statements 2. Schedules 3. Exhibits".
+  - A bare "NOTE 4" takes the next line as its title.
+- **Subsections (new level)** are short title-like standalone units inside the main document and EX-13: at most 100 characters and 14 words, in title case or capitals, no final period, no amounts. They must sit at least 200 characters after the previous boundary. Text that repeats three or more times in the filing (page headers and footers) is excluded.
+- **Hard and soft boundaries:**
+  - Attached document, Part, Item and Note are hard boundaries: a chunk never crosses them.
+  - Subsections are soft: several small subsections of the same hard unit may share a chunk, and a subsection is kept whole whenever it fits in one chunk.
+  - Each chunk records all `section_ids` it overlaps. Keep rules (TASK-07) expand at subsection level.
+- **Per-filing outputs:** `segments.jsonl` (chunks) plus `sections.json`, which holds every section with its heading path, part/item/note keys, hard group and quality.
+- **Quality:**
+  - HIGH: 8 or more distinct Items found;
+  - MEDIUM: 3–7;
+  - LOW: fewer (a single `UNSTRUCTURED` section unless notes or subsections are found).
+
 ### 1.2 Tier-2 classification request, keep rules, outputs
 
 **Order**

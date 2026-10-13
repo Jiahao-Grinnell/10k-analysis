@@ -62,8 +62,16 @@ def create_app(config_path: Path | str | None = None) -> Flask:
 
     @app.route("/runs")
     def runs():
-        rows = [queries.run_progress(db(), r) for r in queries.runs(db(), limit=50)]
-        return render_template("runs.html", runs=rows, active=queries.active_run(db()))
+        history = queries.jobs(db(), limit=50)
+        active = next((j for j in history if j["result"] == "running"), None)
+        return render_template("runs.html", jobs=history, active=active)
+
+    @app.route("/structure")
+    def structure():
+        result = queries.structure(cfg, db(), request.args.get("id", ""), request.args.get("model"))
+        if result is None:
+            abort(404, description="Unknown filing ID")
+        return render_template("structure.html", s=result)
 
     @app.route("/filings")
     def filings():
@@ -112,7 +120,8 @@ def create_app(config_path: Path | str | None = None) -> Flask:
     @app.route("/control")
     def control_page():
         web = runner.current(cfg)
-        return render_template("control.html", web=web, active=_active_db_run(), message=request.args.get("msg", ""),
+        job = queries.active_job(db()) if cfg.db_path.is_file() else None
+        return render_template("control.html", web=web, active=_active_db_run(), job=job, message=request.args.get("msg", ""),
                                model_configured=bool(cfg.classify.get("model_tag")) and cfg.classify["backend"] != "fake")
 
     @app.post("/control/start")

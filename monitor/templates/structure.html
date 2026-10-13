@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Structure · {{ s.filing.filing_id }}{% endblock %}
+{% macro label_pills(labels) %}{% for name, n in labels %}<span class="pill lbl-{{ name | lower }}">{{ name }} {{ n }}</span>{% endfor %}{% endmacro %}
+{% macro node(n, depth) %}
+  {% set has_children = n.children | length > 0 %}
+  <details class="node depth-{{ depth }}" id="{{ n.anchor }}" {{ 'open' if depth < 2 }}>
+    <summary>
+      <span class="node-title">{{ n.title }}</span>
+      <span class="node-meta">{{ n.tokens | n }} tokens · {{ n.chunks }} chunk{{ '' if n.chunks == 1 else 's' }} {{ label_pills(n.labels) }}</span>
+    </summary>
+    {% if n.sections %}
+      <div class="node-chunks">
+        {% for sec in n.sections %}{% for cid in sec.chunk_ids %}
+          <a class="chunk-link" href="/chunk?id={{ s.filing.filing_id | urlencode }}&chunk={{ cid }}{% if s.model %}&model={{ s.model | urlencode }}{% endif %}">{{ cid }}</a>
+        {% endfor %}{% endfor %}
+      </div>
+    {% endif %}
+    {% for child in n.children %}{{ node(child, depth + 1) }}{% endfor %}
+  </details>
+{% endmacro %}
+{% block body %}
+{% set f = s.filing %}
+<p><a href="/filing?id={{ f.filing_id | urlencode }}">← filing detail</a></p>
+<h1>Structure <span class="muted">{{ f.ticker }} · {{ f.form }} · {{ f.period or f.year }}</span></h1>
+{% if s.missing %}
+  <p class="muted">This filing has not been segmented yet.</p>
+{% else %}
+<div class="grid">
+  <div class="card"><div class="k">Structure found</div>
+    <div class="v {{ 'ok' if s.quality == 'HIGH' else 'warn' if s.quality == 'MEDIUM' else 'bad' }}">{{ {'HIGH':'Complete','MEDIUM':'Partial','LOW':'Not found'}[s.quality] }}</div>
+    <div class="muted">{{ (s.info.documents[0]['items'] | length) if s.info.documents else 0 }} Items · {{ s.info.documents | sum(attribute='notes') }} notes ·
+      {{ s.info.documents | sum(attribute='subsections') }} subsections</div></div>
+  <div class="card"><div class="k">Pieces</div><div class="v">{{ s.n_chunks | n }} chunks</div>
+    <div class="muted">{{ s.n_sections | n }} sections · {{ s.tokens | n }} tokens</div></div>
+  <div class="card"><div class="k">Items found</div>
+    <div>{% for k in (s.info.documents[0]['items'] if s.info.documents else []) %}<span class="pill">{{ k }}</span>{% else %}<span class="muted">none — split by subsections only</span>{% endfor %}</div></div>
+</div>
+
+<h2>Document map</h2>
+<p class="muted">The whole filing from start to end; width = length. Click a part to jump to it in the outline.</p>
+<div class="docmap">
+  {% for seg in s.segments %}<a class="seg c{{ seg.color }}" style="width:{{ seg.width }}%" href="#{{ seg.anchor }}"
+     title="{{ seg.label }} — {{ seg.tokens | n }} tokens">{% if seg.width > 4 %}{{ seg.label }}{% endif %}</a>{% endfor %}
+</div>
+{% if s.model %}
+<div class="docmap chunks" title="chunks coloured by label">
+  {% for c in s.chunk_bar %}<a class="cseg lbl-{{ c.label | lower }}" style="width:{{ c.width }}%"
+     href="/chunk?id={{ f.filing_id | urlencode }}&chunk={{ c.id }}&model={{ s.model | urlencode }}" title="{{ c.id }}: {{ c.label }}"></a>{% endfor %}
+</div>
+<p class="muted">Lower bar: every chunk, coloured by the filter's label with model <b>{{ s.model }}</b>:
+  <span class="pill lbl-keep">KEEP</span> <span class="pill lbl-uncertain">UNCERTAIN</span> <span class="pill lbl-drop">DROP</span>
+  {% if s.models | length > 1 %} · other models: {% for m in s.models if m != s.model %}<a href="/structure?id={{ f.filing_id | urlencode }}&model={{ m | urlencode }}">{{ m }}</a> {% endfor %}{% endif %}</p>
+{% endif %}
+
+<h2>Outline</h2>
+<p class="muted">Attached documents → Part → Item → Note → subsection. Each line shows its length, how many chunks it was cut into{% if s.model %}, and the filter's labels{% endif %}. The chunk links open the original text.</p>
+<div class="outline">
+  {% for child in s.tree.children %}{{ node(child, 0) }}{% endfor %}
+</div>
+{% endif %}
+{% endblock %}

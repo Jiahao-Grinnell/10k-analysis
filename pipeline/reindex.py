@@ -9,10 +9,12 @@ from pipeline.records import read_json
 
 def reindex_records(cfg, db) -> dict:
     counts: Counter = Counter()
+    from pipeline.segment.stage import detail
     for record in (cfg.outputs_dir / "segments").rglob("*.record.json"):
         value = read_json(record)
         state.set_stage(db, value["filing_id"], "segment", value.get("status", "failed"), started=value.get("started"),
-                        finished=value.get("finished"), tokens_in=value.get("tokens"), error=value.get("error"))
+                        finished=value.get("finished"), tokens_in=value.get("tokens"), error=value.get("error"),
+                        detail=detail(value))
         counts["segment"] += 1
     # Filings without usable Markdown never get a segment record. If segmentation has run at all,
     # restore their status from the registry, as the segment stage would have set it.

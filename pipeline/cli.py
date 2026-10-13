@@ -44,7 +44,7 @@ def _print_scan(result: dict) -> None:
 
 def cmd_scan(cfg, args) -> int:
     with closing(state.connect(cfg.db_path)) as db:
-        run_id = state.start_run(db, "scan", _args(args))
+        run_id = state.start_run(db, "scan", _args(args), job_id=getattr(args, "_job_id", None))
         result = corpus.scan(cfg, db)
         state.finish_run(db, run_id, 0)
     _print_scan(result)
@@ -55,7 +55,7 @@ def cmd_convert(cfg, args) -> int:
     from pipeline import convert_stage
     filings = _selected(cfg, args)
     with closing(state.connect(cfg.db_path)) as db:
-        run_id = state.start_run(db, "convert", _args(args), planned=len(filings))
+        run_id = state.start_run(db, "convert", _args(args), planned=len(filings), job_id=getattr(args, "_job_id", None))
         print(f"convert: {len(filings)} filings (existing Markdown is indexed, never rewritten)", flush=True)
         result = convert_stage.run(cfg, db, filings, reconvert_changed=getattr(args, "reconvert_changed", False))
         code = control.EXIT_STOPPED if result["stopped"] else 1 if result["errors"] else 0
@@ -68,7 +68,7 @@ def cmd_segment(cfg, args) -> int:
     from pipeline.segment import stage as segment_stage
     filings = _selected(cfg, args)
     with closing(state.connect(cfg.db_path)) as db:
-        run_id = state.start_run(db, "segment", _args(args), planned=len(filings))
+        run_id = state.start_run(db, "segment", _args(args), planned=len(filings), job_id=getattr(args, "_job_id", None))
         print(f"segment: {len(filings)} filings (finished filings are skipped unless --force)", flush=True)
         result = segment_stage.run(cfg, db, filings, force=args.force)
         code = control.EXIT_STOPPED if result["stopped"] else 1 if result["failures"] else 0
@@ -82,7 +82,8 @@ def cmd_classify(cfg, args, client=None) -> int:
     filings = _selected(cfg, args)
     client = client or clients.from_config(cfg, fake=args.fake_model, fake_delay=args.fake_delay)
     with closing(state.connect(cfg.db_path)) as db:
-        run_id = state.start_run(db, "classify", _args(args), planned=len(filings), model_tag=client.tag)
+        run_id = state.start_run(db, "classify", _args(args), planned=len(filings), model_tag=client.tag,
+                                 job_id=getattr(args, "_job_id", None))
         print(f"classify: {len(filings)} filings with model '{client.tag}', one filing at a time", flush=True)
         try:
             result = classify_stage.run(cfg, db, filings, client, force=args.force, run_id=run_id)
@@ -98,14 +99,22 @@ def cmd_classify(cfg, args, client=None) -> int:
 def cmd_all(cfg, args) -> int:
     from pipeline.classify import client as clients
     client = clients.from_config(cfg, fake=args.fake_model, fake_delay=args.fake_delay)  # fail early if no model is configured
-    cmd_scan(cfg, args)  # pick up filings added to 10K_Filings/ since the last scan
-    codes = []
-    for step in (cmd_convert, cmd_segment, lambda c, a: cmd_classify(c, a, client)):
-        codes.append(step(cfg, args))
-        if codes[-1] == control.EXIT_STOPPED:  # stop requested: do not start the next stage
-            print("Stopped on request; run the same command again to continue.")
-            return control.EXIT_STOPPED
-    return max(codes)
+    with closing(state.connect(cfg.db_path)) as db:  # one row for the whole job; its steps point to it
+        args._job_id = state.start_run(db, "all", _args(args), model_tag=client.tag)
+    code = 130
+    try:
+        cmd_scan(cfg, args)  # pick up filings added to 10K_Filings/ since the last scan
+        codes = []
+        for step in (cmd_convert, cmd_segment, lambda c, a: cmd_classify(c, a, client)):
+            codes.append(step(cfg, args))
+            if codes[-1] == control.EXIT_STOPPED:  # stop requested: do not start the next stage
+                print("Stopped on request; run the same command again to continue.")
+                break
+        code = control.EXIT_STOPPED if codes[-1] == control.EXIT_STOPPED else max(codes)
+        return code
+    finally:
+        with closing(state.connect(cfg.db_path)) as db:
+            state.finish_run(db, args._job_id, code)
 
 
 def cmd_rebuild_index(cfg, args) -> int:

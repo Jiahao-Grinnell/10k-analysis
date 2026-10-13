@@ -17,7 +17,7 @@
   <button>Filter</button>
 </form>
 <table>
-  <tr><th>Filing</th><th>Company</th><th class="num">Year</th><th>Form</th><th>Conversion</th><th class="num">Markdown tokens</th><th>Stages</th></tr>
+  <tr><th>Filing</th><th>Company</th><th class="num">Year</th><th>Form</th><th>Conversion</th><th class="num">Markdown tokens</th><th>Structure</th><th>Stages</th></tr>
   {% for f in r.rows %}
   <tr>
     <td><a href="/filing?id={{ f.filing_id | urlencode }}">{{ f.filing_id.split('/')[-1] }}</a></td>
@@ -26,9 +26,12 @@
     <td>{{ f.form }}{% if f.is_amendment %} <span class="pill warn">amendment</span>{% endif %}</td>
     <td>{{ f.conversion_status or 'not converted' }}</td>
     <td class="num">{{ f.markdown_tokens | n }}</td>
+    <td class="nowrap">{% if f.structure %}<a href="/structure?id={{ f.filing_id | urlencode }}"
+        class="pill {{ 'ok' if f.structure.quality == 'HIGH' else 'warn' if f.structure.quality == 'MEDIUM' else 'bad' }}"
+        title="{{ f.structure.items }} Items · {{ f.structure.sections }} sections · {{ f.structure.chunks }} chunks">{{ {'HIGH':'complete','MEDIUM':'partial','LOW':'not found'}[f.structure.quality] }} · {{ f.structure.chunks }} chunks</a>{% else %}<span class="muted">–</span>{% endif %}</td>
     <td>{% for label, status in f.stages %}<span class="pill {{ 'bad' if status == 'failed' }}">{{ label }}: {{ status }}</span>{% endfor %}</td>
   </tr>
-  {% else %}<tr><td colspan="7" class="muted">No filings match.</td></tr>{% endfor %}
+  {% else %}<tr><td colspan="8" class="muted">No filings match.</td></tr>{% endfor %}
 </table>
 {% if r.pages > 1 %}
 <p>Page {{ r.page }} of {{ r.pages }} ·

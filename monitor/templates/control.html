@@ -18,7 +18,7 @@
       <div class="v ok">Running</div>
       <div class="muted">Run #{{ active.run_id }} ({{ active.command }}) was started from the command line. Stop it there, or use “Stop after current filing” below.</div>
     {% endif %}
-    {% if active %}<div style="margin-top:8px">{% with r = active %}{% include "_run.html" %}{% endwith %}</div>{% endif %}
+    {% if job %}<div style="margin-top:8px">{% include "_job.html" %}</div>{% endif %}
     <form method="post" action="/control/stop" style="display:inline-block;margin-top:10px">
       <input type="hidden" name="token" value="{{ run_token }}">
       <button>Stop after current filing</button>

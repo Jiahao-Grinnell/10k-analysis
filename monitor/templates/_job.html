@@ -1,0 +1,39 @@
+{# The running job, shown as a pipeline of its steps. Expects `job` from queries.jobs/active_job. #}
+<div class="card job-live" id="job-{{ job.id }}">
+  <div class="job-head">
+    <div>
+      <div class="k">Running now · started {{ job.started }}</div>
+      <div class="job-title">{{ job.selection }}</div>
+      {% if job.model %}<div class="muted">model: {{ job.model }}</div>{% endif %}
+    </div>
+    <div class="job-side"><span class="pill ok">Running</span><div class="muted">{{ job.duration | duration }} so far</div></div>
+  </div>
+  <div class="pipeline">
+    {% set by_name = {} %}
+    {% for s in job.steps %}{% set _ = by_name.update({s.command: s}) %}{% endfor %}
+    {% for step in ['scan', 'convert', 'segment', 'classify'] %}
+      {% set s = by_name.get(step) %}
+      {% set state = 'todo' if not s else ('active' if s.state == 'running' else ('done' if s.finished else 'stale')) %}
+      <div class="step {{ state }}">
+        <div class="step-name">{{ {'scan':'1 · Scan','convert':'2 · Convert','segment':'3 · Segment','classify':'4 · Filter (model)'}[step] }}</div>
+        {% if s and s.planned %}
+          <div class="step-count">{{ s.completed | n }} / {{ s.planned | n }} filings</div>
+          <div class="bar"><span style="width:{{ (100 * (s.completed or 0) / s.planned) | round(1) }}%"></span></div>
+        {% elif s %}<div class="step-count">{{ 'done' if s.finished else 'working…' }}</div>
+        {% else %}<div class="step-count muted">waiting</div>{% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  {% set current = job.steps | selectattr('state', 'equalto', 'running') | list %}
+  {% if current %}{% set c = current[-1] %}
+  <div class="job-now">
+    {% if c.chunk %}
+      Current filing <a href="/filing?id={{ c.chunk.filing_id | urlencode }}">{{ c.chunk.filing_id }}</a>
+      — chunk <b data-field="chunks_done">{{ c.chunk.chunks_done }}</b> of {{ c.chunk.chunks_total }}
+      · <a href="/structure?id={{ c.chunk.filing_id | urlencode }}">structure</a>
+    {% else %}Step: {{ c.name }}{% endif %}
+    <div class="muted">Speed {{ c.rate_per_hour if c.rate_per_hour is not none else '–' }} filings/h ·
+      time left in this step {{ c.eta_seconds | duration }} · last update {{ c.last_update and c.last_update[11:19] or '–' }} UTC</div>
+  </div>
+  {% endif %}
+</div>

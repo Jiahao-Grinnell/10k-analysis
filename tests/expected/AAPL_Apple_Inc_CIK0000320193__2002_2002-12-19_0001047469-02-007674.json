@@ -1,0 +1,129 @@
+{
+ "filing_id": "AAPL_Apple_Inc_CIK0000320193/2002_2002-12-19_0001047469-02-007674",
+ "why": "minimal-HTML fallback body, 2001-08, <br>-delimited headings",
+ "review": "checked by the assistant against the Markdown on 2026-10-12; awaiting user confirmation",
+ "quality": "HIGH",
+ "headings": [
+  [
+   "part",
+   "I",
+   3006,
+   "PART I"
+  ],
+  [
+   "item",
+   "1",
+   3579,
+   "Item 1. Business"
+  ],
+  [
+   "item",
+   "2",
+   59233,
+   "Item 2. Properties"
+  ],
+  [
+   "item",
+   "3",
+   61178,
+   "Item 3. Legal Proceedings"
+  ],
+  [
+   "item",
+   "4",
+   72993,
+   "Item 4. Submission of Matters to a Vote of Security Holders"
+  ],
+  [
+   "part",
+   "II",
+   73266,
+   "PART II"
+  ],
+  [
+   "item",
+   "5",
+   73287,
+   "Item 5. Market for the Registrant's Common Equity and Related Shareholder Matter"
+  ],
+  [
+   "item",
+   "6",
+   75187,
+   "Item 6. Selected Financial Data"
+  ],
+  [
+   "item",
+   "7",
+   80583,
+   "Item 7. Management's Discussion and Analysis of Financial Condition and Results "
+  ],
+  [
+   "item",
+   "7A",
+   201029,
+   "Item 7A. Disclosures About Market Risk"
+  ],
+  [
+   "item",
+   "8",
+   213050,
+   "Item 8. Financial Statements and Supplementary Data"
+  ],
+  [
+   "item",
+   "9",
+   407512,
+   "Item 9. Changes in and Disagreements with Accountants on Accounting and Financia"
+  ],
+  [
+   "part",
+   "III",
+   409868,
+   "PART III"
+  ],
+  [
+   "item",
+   "10",
+   409890,
+   "Item 10. Directors and Executive Officers of the Registrant"
+  ],
+  [
+   "item",
+   "11",
+   418341,
+   "Item 11. Executive Compensation"
+  ],
+  [
+   "item",
+   "12",
+   432591,
+   "Item 12. Security Ownership of Certain Beneficial Owners and Management"
+  ],
+  [
+   "item",
+   "13",
+   441410,
+   "Item 13. Certain Relationships and Related Transactions"
+  ],
+  [
+   "item",
+   "14",
+   443452,
+   "Item 14. Controls and Procedures"
+  ],
+  [
+   "part",
+   "IV",
+   444897,
+   "PART IV"
+  ],
+  [
+   "item",
+   "15",
+   444918,
+   "Item 15. Exhibits"
+  ]
+ ],
+ "notes": []
+}

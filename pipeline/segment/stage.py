@@ -1,4 +1,4 @@
-"""Segmentation stage: one segments.jsonl and one record per filing."""
+"""Segmentation stage: per filing a segments.jsonl (chunks), a sections.json (structure) and a record."""
 from __future__ import annotations
 
 from collections import Counter
@@ -10,9 +10,10 @@ from pipeline.corpus import CONVERTED
 from pipeline.records import atomic_text, is_current, now, read_json, sha256_file, write_json, write_record
 from pipeline.segment.blocks import parse_blocks
 from pipeline.segment.chunks import build_chunks
+from pipeline.segment.structure import analyze
 
 STAGE = "segment"
-VERSION = "segment-1"
+VERSION = "segment-3"  # 2: Part/Item/Note/subsection structure; 3: stricter fixed-width subsection headings
 
 
 def settings(cfg) -> dict:
@@ -24,6 +25,17 @@ def paths(cfg, filing) -> tuple[Path, Path]:
     return base.with_name(base.name + ".segments.jsonl"), base.with_name(base.name + ".record.json")
 
 
+def sections_path(cfg, filing) -> Path:
+    base = cfg.outputs_dir / "segments" / filing.filing_id
+    return base.with_name(base.name + ".sections.json")
+
+
+def detail(record: dict) -> dict:
+    """Short structure summary for the status DB and the monitor."""
+    return {"quality": record.get("segmentation_quality"), "items": len(record.get("items") or []),
+            "sections": record.get("sections"), "chunks": record.get("chunks")}
+
+
 def read_markdown(path: Path) -> str:
     # Decode bytes directly so character offsets match the file exactly (no newline translation).
     return path.read_bytes().decode("utf-8")
@@ -33,13 +45,17 @@ def load_chunks(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
-def segment_filing(cfg, filing) -> tuple[list[dict], int]:
+def segment_filing(cfg, filing) -> tuple[list[dict], int, dict]:
     text = read_markdown(filing.markdown_path)
     encoding = tokens.encoding(cfg.encoding, str(cfg.tiktoken_cache))
     count = lambda value: len(encoding.encode_ordinary(value))
-    chunks = build_chunks(text, parse_blocks(text), cfg.chunk_max_tokens, count)
+    blocks = parse_blocks(text)
+    structure = analyze(text, blocks, filing.form)
+    chunks = build_chunks(text, blocks, cfg.chunk_max_tokens, count, structure.sections, structure.quality)
     rows = [{"filing_id": filing.filing_id, **c.to_dict()} for c in chunks]
-    return rows, sum(c.tokens for c in chunks)
+    sections = {"filing_id": filing.filing_id, "quality": structure.quality, "info": structure.info,
+                "sections": [{k: v for k, v in vars(s).items()} for s in structure.sections]}
+    return rows, sum(c.tokens for c in chunks), sections
 
 
 def run(cfg, db, filings: list, force: bool = False, log=print) -> dict:
@@ -60,19 +76,25 @@ def run(cfg, db, filings: list, force: bool = False, log=print) -> dict:
                 counts[status] += 1
                 continue
             output, record = paths(cfg, filing)
-            inputs = {"markdown": sha256_file(filing.markdown_path)}
+            inputs = {"markdown": sha256_file(filing.markdown_path), "form": filing.form}
             if not force and is_current(record, stage_version=VERSION, inputs=inputs, settings=settings(cfg)):
                 counts["already_done"] += 1
+                done = read_json(record)
                 state.set_stage(db, filing.filing_id, STAGE, "done", started=started, finished=now(),
-                                tokens_in=read_json(record).get("tokens"))
+                                tokens_in=done.get("tokens"), detail=detail(done))
                 continue
             record.unlink(missing_ok=True)  # a filing without a record counts as not done
-            rows, total = segment_filing(cfg, filing)
+            rows, total, sections = segment_filing(cfg, filing)
             atomic_text(output, "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+            write_json(sections_path(cfg, filing), sections)
             write_record(record, stage=STAGE, stage_version=VERSION, filing_id=filing.filing_id, inputs=inputs,
-                         settings=settings(cfg), outputs=[output], started=started,
-                         extra={"chunks": len(rows), "tokens": total, "segmentation_quality": "LOW"})
-            state.set_stage(db, filing.filing_id, STAGE, "done", started=started, finished=now(), tokens_in=total)
+                         settings=settings(cfg), outputs=[output, sections_path(cfg, filing)], started=started,
+                         extra={"chunks": len(rows), "tokens": total, "sections": len(sections["sections"]),
+                                "segmentation_quality": sections["quality"],
+                                "items": sections["info"]["documents"][0]["items"]})
+            counts[f"quality_{sections['quality']}"] += 1
+            state.set_stage(db, filing.filing_id, STAGE, "done", started=started, finished=now(), tokens_in=total,
+                            detail=detail(read_json(record)))
             counts["segmented"] += 1
         except Exception as exc:  # one bad filing must not stop the corpus
             error = f"{type(exc).__name__}: {exc}"

@@ -26,10 +26,10 @@ CREATE TABLE IF NOT EXISTS filings (""" + ", ".join(f"{k} {v}" for k, v in FILIN
 CREATE TABLE IF NOT EXISTS stage_status (
     filing_id TEXT NOT NULL, stage TEXT NOT NULL, model_tag TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL, started TEXT, finished TEXT, tokens_in INTEGER, tokens_kept INTEGER,
-    error TEXT, PRIMARY KEY (filing_id, stage, model_tag));
+    error TEXT, detail TEXT, PRIMARY KEY (filing_id, stage, model_tag));
 CREATE TABLE IF NOT EXISTS runs (
     run_id INTEGER PRIMARY KEY AUTOINCREMENT, command TEXT, args TEXT, started TEXT,
-    finished TEXT, exit_code INTEGER, planned INTEGER, model_tag TEXT, pid INTEGER);
+    finished TEXT, exit_code INTEGER, planned INTEGER, model_tag TEXT, pid INTEGER, job_id INTEGER);
 CREATE TABLE IF NOT EXISTS progress (
     run_id INTEGER PRIMARY KEY, filing_id TEXT, chunks_done INTEGER, chunks_total INTEGER,
     updated_at TEXT);
@@ -49,9 +49,11 @@ def _migrate(connection: sqlite3.Connection) -> None:
         if name not in existing:
             connection.execute(f"ALTER TABLE filings ADD COLUMN {name} {kind.replace(' PRIMARY KEY', '')}")
     run_columns = {row[1] for row in connection.execute("PRAGMA table_info(runs)")}
-    for name, kind in {"planned": "INTEGER", "model_tag": "TEXT", "pid": "INTEGER"}.items():
+    for name, kind in {"planned": "INTEGER", "model_tag": "TEXT", "pid": "INTEGER", "job_id": "INTEGER"}.items():
         if name not in run_columns:
             connection.execute(f"ALTER TABLE runs ADD COLUMN {name} {kind}")
+    if "detail" not in {row[1] for row in connection.execute("PRAGMA table_info(stage_status)")}:
+        connection.execute("ALTER TABLE stage_status ADD COLUMN detail TEXT")
     connection.executescript(INDEXES)
 
 
@@ -84,21 +86,25 @@ def set_conversion(db: sqlite3.Connection, filing_id: str, status: str, raw_form
 
 def set_stage(db: sqlite3.Connection, filing_id: str, stage: str, status: str, *, model_tag: str = "",
               started: str | None = None, finished: str | None = None, tokens_in: int | None = None,
-              tokens_kept: int | None = None, error: str | None = None) -> None:
+              tokens_kept: int | None = None, error: str | None = None, detail: dict | None = None) -> None:
+    """`detail` is a small JSON summary shown by the monitor (e.g. segmentation quality and counts)."""
     db.execute(
-        """INSERT INTO stage_status VALUES (?,?,?,?,?,?,?,?,?)
+        """INSERT INTO stage_status VALUES (?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(filing_id, stage, model_tag) DO UPDATE SET status=excluded.status,
            started=excluded.started, finished=excluded.finished, tokens_in=excluded.tokens_in,
-           tokens_kept=excluded.tokens_kept, error=excluded.error""",
-        (filing_id, stage, model_tag, status, started, finished, tokens_in, tokens_kept, error))
+           tokens_kept=excluded.tokens_kept, error=excluded.error, detail=excluded.detail""",
+        (filing_id, stage, model_tag, status, started, finished, tokens_in, tokens_kept, error,
+         json.dumps(detail) if detail else None))
 
 
 def start_run(db: sqlite3.Connection, command: str, args: dict, planned: int | None = None,
-              model_tag: str = "") -> int:
+              model_tag: str = "", job_id: int | None = None) -> int:
     """`planned` is the number of filings selected, used by the monitor for progress and time left.
-    The process ID lets the monitor tell a live run from one whose process is gone."""
-    cursor = db.execute("INSERT INTO runs (command, args, started, planned, model_tag, pid) VALUES (?,?,?,?,?,?)",
-                        (command, json.dumps(args, default=str), now(), planned, model_tag, os.getpid()))
+    The process ID lets the monitor tell a live run from one whose process is gone.
+    `job_id` groups the steps of one `all` command (the run row of that `all` command)."""
+    cursor = db.execute("INSERT INTO runs (command, args, started, planned, model_tag, pid, job_id) "
+                        "VALUES (?,?,?,?,?,?,?)",
+                        (command, json.dumps(args, default=str), now(), planned, model_tag, os.getpid(), job_id))
     db.commit()
     return cursor.lastrowid
 

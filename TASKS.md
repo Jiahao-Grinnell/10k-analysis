@@ -256,6 +256,34 @@ The tasks below replace the earlier TASK-03 to TASK-08.
   - **Exit code 3** means "stopped on request", and the monitor shows such runs as "stopped on request".
   - The monitor writes only `runs/web_run.json`, `runs/stop.request` and `runs/logs/web_*.log`. It never writes the status DB.
 
+### TASK-04c — Clearer runs page and a structure view per filing (user request, 2026-10-13)
+- **Goal:**
+  - The user can see at a glance what each run processed, how far each step got, and the result.
+  - The user can inspect how any filing was segmented.
+- **Files:**
+  - new: `monitor/templates/_job.html`, `structure.html`;
+  - changed: `monitor/queries.py`, `app.py`, templates `runs.html`, `overview.html`, `control.html`, `filings.html`, `filing.html`, `base.html`, `static/monitor.js`;
+  - pipeline: `state.py` (`runs.job_id`, `stage_status.detail`), `cli.py` (an `all` job row grouping its steps), `segment/stage.py` and `reindex.py` (a structure summary in `detail`);
+  - removed: `monitor/templates/_run.html`.
+- **What it does:**
+  - **Runs page:**
+    - one row per action, so an `all` command and its scan/convert/segment/filter steps show as one job;
+    - each row shows the selection in plain words, step chips with filings done / planned, a result pill (Finished / Finished with errors / Stopped on request / Interrupted / Running), duration, and expandable step details;
+    - the running job appears on top as a four-step pipeline with progress bars, the current filing and chunk, speed and time left;
+    - older runs recorded before job IDs existed are grouped by identical arguments.
+  - **Structure page (`/structure?id=…`):**
+    - summary cards: structure found, Items, notes, subsections, chunks;
+    - a document map bar (width = length, one colour per Item or attached document; click to jump);
+    - when classified, a chunk bar coloured by KEEP/UNCERTAIN/DROP;
+    - a collapsible outline (document → Part → Item → Note → subsection) with tokens, chunk counts, label counts and links to each chunk's text.
+  - **Filings list and filing page:**
+    - the list gets a "Structure" column (complete / partial / not found, chunk count) linking to the structure page;
+    - the filing page links to it.
+- **Status:** ready for review
+- **Verification (2026-10-13):**
+  - `pytest` monitor and control tests: 16 passed. The new assertions cover: one history row for an `all` command, the structure page (map, outline, chunk links, labels), 404 for unknown IDs, "not segmented yet", the structure links in the filings list, and the running-job panel.
+  - Live on the real DB: `/runs`, `/structure` (Apple 1995 and Apple 2025), `/filings`, and `/` all return 200 in 0.07–0.35 s. The running re-segmentation shows as "all registered filings · Segment n/2,896".
+
 ### TASK-05 — Converter: extra forms (changes `convertmd.py`; needs user approval of the diff)
 - **Goal:** 10-KSB, 10-KSB405, 10-KT and amendments convert, and no existing output is reconverted.
 - **Files:** changed: `convertmd.py` (only `FORMS`, `VERSION`, `COMPATIBLE_CHECKED_HASHES`), `verify_outputs.py` (accept compatible hashes); new test fixtures.
@@ -312,7 +340,47 @@ The tasks below replace the earlier TASK-03 to TASK-08.
   - Tables are never separated from their caption, unit line or footnotes.
   - The LOW-quality share is reported by form, format and era.
 - **Tests to add:** `test_segment_items.py`, `test_segment_tables.py`, `test_segment_legacy.py`, `test_segment_real.py` (skips without the corpus).
-- **Status:** todo
+- **Status:** ready for review, with two open items:
+  1. The external-sample checks wait for companies outside the first 100 to be added to `10K_Filings/`.
+  2. The user should confirm the 8 reference lists in `tests/expected/`.
+- **Verification (2026-10-12):**
+  - `pytest -q`: 104 passed. There are 19 new tests:
+    - `test_segment_items.py` covers: a TOC table, a paragraph TOC with page numbers, "see Item 7" in prose, "Continued" page headers, spacer-row heading tables, a minimal-HTML body with `<br>` headings, notes ("NOTE 1" + title, "Note 2 –", "3. Title"), Items 7/8 for 10-KSB, EX-13 notes, the UNSTRUCTURED fallback, and chunks never crossing an Item or Note.
+    - `test_segment_tables.py`: caption, unit line and footnotes stay with their table at every budget; a split pipe table repeats its header in the model input only.
+    - `test_segment_legacy.py`: legacy TOC lines and wrapped "Item 8 on this Form" prose are not boundaries; boundaries inside a fence split it, and the model input stays fenced.
+    - `test_segment_real.py`: 8 real filings match their reference lists exactly. These lists come from my own check of the Markdown and are awaiting the user's confirmation. The 8 filings cover:
+      - Apple 2025 (iXBRL), Apple 1996 (legacy), Apple 2002 (minimal-HTML fallback);
+      - ADM 2006 (pipe-table headings), Atmos 2002 (legacy, numbered notes);
+      - Cisco 2015 (spacer-row tables), Realty Income 2017 (largest filing), Wells Fargo 2020 (Items in EX-13).
+  - **Full corpus, `segment --force` (34.7 min, 0 failures):**
+    - 2,894 filings, 470,496 chunks, 588,436,815 tokens; every filing passed the lossless check;
+    - chunk tokens: median 1,345, p95 1,975, maximum 2,000 (none over the limit);
+    - sections per filing: median 143.
+  - **Structure quality:**
+
+    | | HIGH | MEDIUM | LOW |
+    |---|---|---|---|
+    | Filings | 2,826 (97.7%) | 30 | 38 |
+
+    | Era / format | HIGH / filings |
+    |---|---|
+    | ≤2000 legacy | 459/490 |
+    | 2001–08 HTML | 576/591 |
+    | 2009–18 HTML | 959/961 |
+    | 2019+ iXBRL | 685/699 |
+
+    - Notes were found in 2,065 filings (71%).
+    - LOW filings are mostly companies with a non-standard layout: McDonald's and Morgan Stanley use a cross-reference index with topic-based bodies; Nucor and Wells Fargo in the 1990s wrap the annual report. They still get subsection splits and full classification.
+  - Downstream works unchanged on the new segments. `all --fake-model` reclassified Apple 2025 automatically because its segments changed, and the monitor shows the new heading paths.
+  - `convertmd.py` was not changed.
+- **Decisions and notes:**
+  - **Markdown only:** structure comes from the converter's Markdown; raw-HTML hints were not needed (IMPLEMENTATION_PLAN §1.1 "As built").
+  - **Subsection level added** under Items and Notes. Small subsections share chunks; chunks never cross Part, Item, Note or attached-document boundaries.
+  - **Cost of the finer chunking:** 23% more chunks than segment-1 (470k vs 383k), and so more model requests. The benefit: TASK-07 can keep or drop per subsection instead of per Item.
+  - **Two fixes found by checking real filings:**
+    - the TOC-run rule ends a run when Item numbering steps back, since the TOC's last line can sit right before the body's Item 1;
+    - notes need a median gap of at least 800 characters, so a "1. Financial Statements 2. Schedules 3. Exhibits" list is not taken for notes.
+  - Whole-corpus segmentation now takes about 30–35 minutes on this machine (it was 12 minutes without structure). It runs CPU-only and can be resumed.
 
 ### TASK-07 — Keep rules and filtering reports
 - **Goal:** Kept text follows the SPEC rules at the section level, and the reports show what was kept.

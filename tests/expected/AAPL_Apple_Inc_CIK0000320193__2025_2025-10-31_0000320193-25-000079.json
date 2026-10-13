@@ -1,0 +1,185 @@
+{
+ "filing_id": "AAPL_Apple_Inc_CIK0000320193/2025_2025-10-31_0000320193-25-000079",
+ "why": "inline XBRL, 2019+, TOC table, 'Note N –' notes",
+ "review": "checked by the assistant against the Markdown on 2026-10-12; awaiting user confirmation",
+ "quality": "HIGH",
+ "headings": [
+  [
+   "part",
+   "I",
+   17742,
+   "PART I"
+  ],
+  [
+   "item",
+   "1",
+   17750,
+   "Item 1. Business"
+  ],
+  [
+   "item",
+   "1A",
+   33812,
+   "Item 1A. Risk Factors"
+  ],
+  [
+   "item",
+   "1B",
+   101998,
+   "Item 1B. Unresolved Staff Comments"
+  ],
+  [
+   "item",
+   "1C",
+   102041,
+   "Item 1C. Cybersecurity"
+  ],
+  [
+   "item",
+   "2",
+   104745,
+   "Item 2. Properties"
+  ],
+  [
+   "item",
+   "3",
+   105267,
+   "Item 3. Legal Proceedings"
+  ],
+  [
+   "item",
+   "4",
+   110675,
+   "Item 4. Mine Safety Disclosures"
+  ],
+  [
+   "part",
+   "II",
+   110761,
+   "PART II"
+  ],
+  [
+   "item",
+   "5",
+   110770,
+   "Item 5. Market for Registrant’s Common Equity, Related Stockholder Matters and I"
+  ],
+  [
+   "item",
+   "6",
+   117481,
+   "Item 6. [Reserved]"
+  ],
+  [
+   "item",
+   "7",
+   117539,
+   "Item 7. Management’s Discussion and Analysis of Financial Condition and Results "
+  ],
+  [
+   "item",
+   "7A",
+   144224,
+   "Item 7A. Quantitative and Qualitative Disclosures About Market Risk"
+  ],
+  [
+   "item",
+   "8",
+   148203,
+   "Item 8. Financial Statements and Supplementary Data"
+  ],
+  [
+   "item",
+   "9",
+   283027,
+   "Item 9. Changes in and Disagreements with Accountants on Accounting and Financia"
+  ],
+  [
+   "item",
+   "9A",
+   283128,
+   "Item 9A. Controls and Procedures"
+  ],
+  [
+   "item",
+   "9B",
+   287641,
+   "Item 9B. Other Information"
+  ],
+  [
+   "item",
+   "9C",
+   288215,
+   "Item 9C. Disclosure Regarding Foreign Jurisdictions that Prevent Inspections"
+  ],
+  [
+   "part",
+   "III",
+   288310,
+   "PART III"
+  ],
+  [
+   "item",
+   "10",
+   288320,
+   "Item 10. Directors, Executive Officers and Corporate Governance"
+  ],
+  [
+   "item",
+   "11",
+   288720,
+   "Item 11. Executive Compensation"
+  ],
+  [
+   "item",
+   "12",
+   288879,
+   "Item 12. Security Ownership of Certain Beneficial Owners and Management and Rela"
+  ],
+  [
+   "item",
+   "13",
+   289110,
+   "Item 13. Certain Relationships and Related Transactions, and Director Independen"
+  ],
+  [
+   "item",
+   "14",
+   289320,
+   "Item 14. Principal Accountant Fees and Services"
+  ],
+  [
+   "part",
+   "IV",
+   289531,
+   "PART IV"
+  ],
+  [
+   "item",
+   "15",
+   289540,
+   "Item 15. Exhibit and Financial Statement Schedules"
+  ],
+  [
+   "item",
+   "16",
+   323194,
+   "Item 16. Form 10-K Summary"
+  ]
+ ],
+ "notes": [
+  "1",
+  "2",
+  "3",
+  "4",
+  "5",
+  "6",
+  "7",
+  "8",
+  "9",
+  "10",
+  "11",
+  "12",
+  "13"
+ ]
+}
