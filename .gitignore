@@ -18,3 +18,6 @@ models/
 # secrets and local tool settings
 .env
 .claude/settings.local.json
+
+# experiment: one merged Markdown per company
+Merged_10K/
