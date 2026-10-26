@@ -396,7 +396,7 @@ The tasks below replace the earlier TASK-03 to TASK-08.
   - The report is correct on fixtures.
   - A rules change reruns classification only.
 - **Tests to add:** `test_rules.py`, `test_crossref.py`, `test_reports.py`.
-- **Status:** ready for review
+- **Status:** done (approved by the user, 2026-10-26)
 - **Verification (2026-10-26):**
   - `pytest -q`: 122 passed. The 18 new tests:
     - `test_rules.py`: one KEEP chunk keeps its whole section; failures and UNCERTAIN do too; "see Note 7" keeps Note 7 with the reason recorded, one step only; a reference kind can be switched off; the model input has the heading path and the end of the previous chunk; a keep-rule change reruns classify only, sends no request and keeps the request log; every chunk has one row with its keep decision.
