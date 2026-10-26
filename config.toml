@@ -27,6 +27,11 @@ prompts_dir = "prompts"
 [classify.chat_template_kwargs]
 enable_thinking = false
 
+[keep]
+# Numbered cross-references in kept text ("see Note 7", "Item 8", "Exhibit 13") keep their target
+# in the same filing. Remove a kind to stop following it; only classify reruns, without model requests.
+reference_kinds = ["note", "item", "exhibit"]
+
 [disk]
 min_free_gb = 50                 # monitor warns below this; long runs will pause (TASK-12)
 

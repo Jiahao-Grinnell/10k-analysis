@@ -19,6 +19,9 @@ CLASSIFY_DEFAULTS = {
     "prompt_version": "classify_v1",
     "chat_template_kwargs": {"enable_thinking": False},
 }
+KEEP_DEFAULTS = {
+    "reference_kinds": ["note", "item", "exhibit"],  # cross-reference targets that are kept (rules.py)
+}
 
 
 @dataclass(frozen=True)
@@ -34,6 +37,7 @@ class Config:
     chunk_max_tokens: int
     min_free_gb: float
     classify: dict
+    keep: dict
     data: dict
 
     @property
@@ -60,5 +64,6 @@ def load(path: Path | str | None = None) -> Config:
         min_free_gb=float(data.get("disk", {}).get("min_free_gb", 50)),
         classify={**CLASSIFY_DEFAULTS, **data.get("classify", {}),
                   "prompts_dir": str((base / data.get("classify", {}).get("prompts_dir", "prompts")).resolve())},
+        keep={**KEEP_DEFAULTS, **data.get("keep", {})},
         data=data,
     )

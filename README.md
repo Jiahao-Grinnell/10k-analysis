@@ -69,7 +69,7 @@ All commands: `& '.\.venv\Scripts\python.exe' -m pipeline <command> [options]`.
 | `scan` | Reads `10K_Filings/*/filings.csv` and registers new filings.<ul><li>A missing raw file is recorded as `missing_source`.</li><li>A raw file whose SHA-256 changed is flagged `source_changed`.</li><li>Amendments are linked to the filing they amend.</li></ul> |
 | `convert` | Indexes existing Markdown and converts filings that have none. Existing Markdown is never rewritten. `--reconvert-changed` rebuilds Markdown only for filings whose raw file changed. |
 | `segment` | Splits each filing's Markdown into reading chunks of at most about 2,000 tokens. Every filing is checked: the chunks must join back into the Markdown byte for byte. |
-| `classify` | Labels every chunk KEEP, DROP or UNCERTAIN, one filing at a time. Failures count as UNCERTAIN and are kept. |
+| `classify` | Labels every chunk KEEP, DROP or UNCERTAIN, one filing at a time. Failures count as UNCERTAIN and are kept. Then applies the keep rules: a section with any KEEP or UNCERTAIN chunk is kept whole, and numbered cross-references in kept text ("see Note 7", "Item 8", "Exhibit 13") keep their target in the same filing. Writes a filtering report (`filter_report.json` / `.csv`, `filter_alerts.csv`, `unresolved_references.csv` in `outputs/classify/<model>/`). When only the keep rules change, the stored model answers are reused and no request is sent. |
 | `all` | `scan`, then `convert` + `segment` + `classify` for the selected filings. |
 | `status` | Counts by stage, form and conversion status; total tokens; the last run. |
 | `rebuild-index` | Recreates the status database from the files on disk. |
@@ -108,9 +108,10 @@ Options:
 | `Markdown_10K/<company>/<file>.md` + `.audit.json` | Converted filings | no |
 | `outputs/convert/` | Conversion index (CSV / JSON) | no |
 | `outputs/segments/<company>/<file>.segments.jsonl` + `.record.json` | Chunks with exact character ranges | no |
-| `outputs/classify/<model>/<company>/<file>.*` | `labels.jsonl`, `requests.jsonl`, `kept.md`, `summary.json`, `record.json` | no |
+| `outputs/classify/<model>/<company>/<file>.*` | `labels.jsonl`, `requests.jsonl`, `references.jsonl`, `kept.md`, `summary.json`, `record.json` | no |
+| `outputs/classify/<model>/filter_report.*`, `filter_alerts.csv`, `unresolved_references.csv` | Kept tokens per Item, reasons, reference statistics; filings whose MD&A or financial statements Item kept nothing or was not found | no |
 | `runs/pipeline.sqlite` | Status database (rebuildable from files) | no |
-| `config.toml` | Paths, chunk size, model settings, disk threshold, GPU budget | yes |
+| `config.toml` | Paths, chunk size, model settings, keep rules (`[keep] reference_kinds`), disk threshold, GPU budget | yes |
 | `prompts/` | Category definitions (from the research document), classification prompt, answer schema | yes |
 | `pipeline/`, `monitor/`, `tests/` | Code | yes |
 

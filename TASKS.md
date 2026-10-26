@@ -396,7 +396,31 @@ The tasks below replace the earlier TASK-03 to TASK-08.
   - The report is correct on fixtures.
   - A rules change reruns classification only.
 - **Tests to add:** `test_rules.py`, `test_crossref.py`, `test_reports.py`.
-- **Status:** todo
+- **Status:** ready for review
+- **Verification (2026-10-26):**
+  - `pytest -q`: 122 passed. The 18 new tests:
+    - `test_rules.py`: one KEEP chunk keeps its whole section; failures and UNCERTAIN do too; "see Note 7" keeps Note 7 with the reason recorded, one step only; a reference kind can be switched off; the model input has the heading path and the end of the previous chunk; a keep-rule change reruns classify only, sends no request and keeps the request log; every chunk has one row with its keep decision.
+    - `test_crossref.py`: numbered references, lists and ranges are found; debt notes ("6.5% Notes due 2030"), percentages and years are not; each reference gets a status (front matter, self, follow, locator, unresolved, index); an index of notes and a fixed-width exhibit list are not followed, but "Intangible assets (Note 7)" in a statement row is; an exhibit reference keeps the attached EX-13; a non-attached exhibit is `not_in_filing`.
+    - `test_reports.py`: kept tokens per Item and per keep reason; alerts for MD&A / statements Items with nothing kept or not found (6/7 for 10-KSB); the corpus report is weighted and its CSV files are written.
+    - `test_monitor.py`: the filing page says why a DROP chunk was kept.
+  - One existing test was changed on purpose: `test_classify.py::test_kept_text_is_verbatim_and_in_order` now expects DROP chunks kept with their section (SPEC F4). Its checks that kept text is verbatim and in order are unchanged.
+  - **Real filings:** `classify --fake-model --company AAPL --force` on 32 filings: report files written; 2 alerts (2004: Item 8 not found; 2008: Item 7 not found). Spot checks on Apple 2025: "refer to Note 7" → Note 7 followed; "Notes … in Part II, Item 8" → Item 8 treated as a locator; Item headings → self. The monitor's filing, chunk, structure, overview and problems pages return 200 on the real DB.
+  - **Reference statistics on all 2,894 filings** (read-only script, every section treated as kept, so this is an upper bound):
+
+    | Kind | Followed | Unresolved | Resolved share | Not followed (front matter / self / index / locator) |
+    |---|---|---|---|---|
+    | Note | 112,911 | 20,253 | 84.8% | 30,438 |
+    | Item | 31,149 | 1,597 | 95.1% | 122,677 |
+    | Exhibit | 3,478 | (104,800 not attached) | 100% of attached | 9,084 |
+
+    - Unresolved notes are concentrated in 926 filings, mostly those where segmentation found no notes (29% of filings), plus lettered notes ("Note A").
+    - Text that followed references point to, as a share of all text: notes 25%, Items 55%, exhibits 2.6%. With a real model only kept text is a source, so the real share is lower; but Item references ("see Item 1A", "Item 8") can keep whole large Items. `[keep] reference_kinds` can switch a kind off, and only classify reruns, without model requests. To be decided with real labels in TASK-11.
+    - Speed: at most 1.7 s per filing (Realty Income) for finding and resolving references.
+- **Decisions and notes:**
+  - `final_label` and `kept_by` keep the model's answer; the keep decision is in `kept`, `kept_reason`, `kept_detail`.
+  - Reference statuses and the rules that skip them are listed in IMPLEMENTATION_PLAN §1.2 "As built in TASK-07".
+  - The model input (heading path + end of previous chunk) already existed since TASK-02; a test now covers it.
+  - Classify outputs from before this task (`classify-1`) are redone on the next run; for the fake model this costs nothing.
 
 ### TASK-08 — Compaction and published output for scheduled tasks
 - **Goal:** Each filing gets a validated, compacted clean file, a provenance map and a row in the work list that the scheduled tasks consume. Weighted token savings are reported for every step.

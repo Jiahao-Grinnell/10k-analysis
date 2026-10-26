@@ -173,6 +173,20 @@ Each chunk record contains: `filing_id`, `chunk_id`, `section_id`, `heading_path
 - `.summary.json`
 - `.record.json`
 
+**As built in TASK-07 (`classify-2`, `rules-2`).** These points replace the keep rules above where they differ.
+- **Label rows** keep the model's decision in `final_label` / `kept_by` (model or failure) and add `kept` (bool), `kept_reason` (`label` | `section` | `reference`) and `kept_detail` (e.g. "section s0012", "Note 7 referenced in c00010").
+- **Section expansion** works at the leaf-section level of `sections.json` (subsection, note, Item). Every chunk that overlaps a kept section is kept, so a chunk shared by two small subsections can carry a little extra text.
+- **Cross-references** (`pipeline/classify/crossref.py`): numbered `Note N` / `Note A`, `Item N[A]` and `Exhibit N[.M]` references, including lists and ranges ("Notes 3 through 5"), found in the text of sections kept by the label or by expansion. One step only: text kept by a reference does not pull in further references. Each reference is stored in `.references.jsonl` with a status:
+  - `follow`: the target exists and is kept;
+  - `unresolved`: no such note or Item was found by segmentation;
+  - `not_in_filing`: an exhibit that is not attached;
+  - not followed: `front_matter` (cover, table of contents), `index` (list entries: references that start a table cell, line or paragraph, in a run naming 3 or more different targets within 1,000 characters), `self` (the text's own note, Item or exhibit, such as its heading), `locator` (an Item in the same sentence as a Note, e.g. "Note 7 in Item 8"), `kind_off` (kind disabled in config).
+- **Config:** `[keep] reference_kinds = ["note", "item", "exhibit"]`. It is part of the settings hash.
+- **Rules-only rerun:** the record stores `model_settings_sha256` (client, prompt, context). When inputs and model settings match a finished result and only the keep rules changed, the stored model answers are reused: the rules are applied again and no request is sent.
+- **Reports** (`pipeline/reports.py`):
+  - each `summary.json` holds kept tokens per Item / attached document and per keep reason, failures, reference counts and alerts;
+  - after every classify run, `outputs/classify/<model>/` gets `filter_report.json` (weighted totals, per Item, per segmentation quality, reference statistics), `filter_report.csv` (one row per filing), `filter_alerts.csv` (MD&A or financial statements Item with nothing kept, or not found: Items 7/8, or 6/7 for 10-KSB, with EX-13 kept tokens for context) and `unresolved_references.csv`.
+
 ### 1.3 Model selection
 
 **Runtime.** No Docker and no WSL. Models are downloaded from Hugging Face as plain files into `models/` and run by llama.cpp `llama-server`, native Windows CUDA build, with the build tag pinned (latest seen: b11429).
@@ -360,7 +374,8 @@ Files are the source of truth. The SQLite database is an index that can be rebui
 | `10K_Filings/` | All raw input, written by the user's downloader; read-only for this tool | no |
 | `Markdown_10K/` | Conversion output; existing files never rewritten, new filings added | no |
 | `outputs/segments/<company>/<file>.segments.jsonl` + `.record.json` | Chunks and the segmentation record | no |
-| `outputs/classify/<model_tag>/<company>/<file>.*` | labels, requests, kept, summary, record | no |
+| `outputs/classify/<model_tag>/<company>/<file>.*` | labels, requests, references, kept, summary, record | no |
+| `outputs/classify/<model_tag>/filter_report.*`, `filter_alerts.csv`, `unresolved_references.csv` | Filtering report over every finished filing of that model | no |
 | `outputs/clean/<model_tag>/<company>/<file>.clean.md`, `.clean.map.json`, `.record.json` | Published output | no |
 | `outputs/clean/<model_tag>/clean_index.csv`, `.jsonl`, `clean_summary.json` | Work list and savings for scheduled tasks | no |
 | `outputs/selection/` | Sample list, label xlsx files, evaluation reports | no (label files backed up by the user) |

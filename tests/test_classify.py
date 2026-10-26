@@ -107,7 +107,9 @@ def test_kept_text_is_verbatim_and_in_order(small_corpus):
     rows = read_jsonl(outputs(small_corpus, filing)["labels"])
     kept = outputs(small_corpus, filing)["kept"].read_bytes().decode("utf-8")
     position, found = kept.index("\n\n") + 2, []
-    marker = re.compile(r"<!-- chunk (c\d+) \| .*? \| chars (\d+)-(\d+) \| length (\d+) \| (KEEP|UNCERTAIN) -->\n")
+    # Since rules-2 a DROP chunk can be kept with its section; its marker says why.
+    marker = re.compile(r"<!-- chunk (c\d+) \| .*? \| chars (\d+)-(\d+) \| length (\d+) \| "
+                        r"(KEEP|UNCERTAIN|DROP, kept: [^\n]*?) -->\n")
     while position < len(kept):
         match = marker.match(kept, position)
         assert match, kept[position:position + 80]
@@ -116,7 +118,8 @@ def test_kept_text_is_verbatim_and_in_order(small_corpus):
         assert text == markdown[int(match.group(2)):int(match.group(3))]
         found.append(match.group(1))
         position = match.end() + length + 2
-    assert found == [r["chunk_id"] for r in rows if r["final_label"] in {"KEEP", "UNCERTAIN"}]
+    assert found == [r["chunk_id"] for r in rows if r["kept"]]
+    assert all(r["kept"] for r in rows if r["final_label"] in {"KEEP", "UNCERTAIN"})
     assert any(r["final_label"] == "DROP" for r in rows) and found
 
 

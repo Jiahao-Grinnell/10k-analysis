@@ -43,7 +43,7 @@
     <td>{{ c.heading_path | join(' > ') }}</td>
     <td class="muted">{{ c.kind }}</td>
     <td class="num">{{ c.tokens | n }}</td>
-    <td class="{{ 'muted' if l and l.final_label == 'DROP' else '' }}">{{ l.final_label if l else '–' }}</td>
+    <td class="{{ 'muted' if l and not l.kept and l.final_label == 'DROP' else '' }}">{{ l.final_label if l else '–' }}{% if l and l.kept and l.kept_reason != 'label' %} <span class="muted" title="{{ l.kept_detail }}">· kept: {{ l.kept_reason }}</span>{% endif %}</td>
     <td class="muted">{{ l.kept_by if l else '' }}</td>
     <td>{% if l %}{{ l.reason }}{% if l.error %} <span class="bad">{{ l.error }}</span>{% endif %}{% endif %}</td>
   </tr>

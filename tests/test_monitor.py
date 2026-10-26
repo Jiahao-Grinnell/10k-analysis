@@ -124,3 +124,16 @@ def test_missing_database_explains(small_corpus):
     app = create_app(small_corpus.path)
     response = app.test_client().get("/")
     assert response.status_code == 503 and "pipeline scan" in response.get_data(as_text=True)
+
+
+def test_filing_page_says_why_a_dropped_chunk_was_kept(tmp_path):
+    from pipeline.classify.client import FakeClient
+    from test_classify import answer, classify, excerpt, prepare
+    cfg = build_corpus(tmp_path, SMALL_FILES)
+    filing = prepare(cfg)[FILING]
+    # one chunk of Item 1 is KEEP, everything else DROP: the rest of its section is kept with it
+    classify(cfg, [filing], FakeClient(lambda m: answer("KEEP" if "Research costs" in excerpt(m) else "DROP")))
+    app = create_app(cfg.path)
+    app.testing = True
+    detail = page(app.test_client(), f"/filing?id={FILING}")
+    assert "kept: section" in detail

@@ -1,7 +1,11 @@
 """Classification stage: one filing at a time; that filing's outputs are written before the next starts.
 
 Within a filing, up to `parallel_requests` chunk requests run concurrently; every
-request holds text from that filing only. The record file is written last.
+request holds text from that filing only. The keep rules (rules.py) then decide the
+kept text. The record file is written last.
+
+When only the keep rules changed, the stored model answers are reused: the rules are
+applied again without sending any request.
 """
 from __future__ import annotations
 
@@ -11,30 +15,58 @@ import json
 from pathlib import Path
 import time
 
-from pipeline import control, state, tokens
+from pipeline import control, reports, state, tokens
 from pipeline.classify import prompt as prompts
 from pipeline.classify.client import ClientError
-from pipeline.classify.rules import KEPT, RULES_VERSION, InvalidResponse, decide, parse
-from pipeline.records import atomic_text, is_current, now, read_json, sha256_file, write_json, write_record
+from pipeline.classify.rules import RULES_VERSION, InvalidResponse, apply_keep_rules, decide, parse
+from pipeline.records import (atomic_text, is_current, now, read_json, settings_sha256, sha256_file, write_json,
+                             write_record)
 from pipeline.segment import stage as segment_stage
 from pipeline.segment.chunks import model_text
 
 STAGE = "classify"
-VERSION = "classify-1"
+VERSION = "classify-2"  # 2: keep rules (section expansion, cross-references), references file
 ATTEMPTS = 2  # one retry, then UNCERTAIN
 
 
 def output_paths(cfg, model_tag: str, filing) -> dict[str, Path]:
     base = cfg.outputs_dir / STAGE / model_tag / filing.filing_id
     return {name: base.with_name(base.name + suffix) for name, suffix in [
-        ("labels", ".labels.jsonl"), ("requests", ".requests.jsonl"), ("kept", ".kept.md"),
-        ("summary", ".summary.json"), ("record", ".record.json")]}
+        ("labels", ".labels.jsonl"), ("requests", ".requests.jsonl"), ("references", ".references.jsonl"),
+        ("kept", ".kept.md"), ("summary", ".summary.json"), ("record", ".record.json")]}
+
+
+def model_settings(cfg, client, prompt) -> dict:
+    """Everything that can change a model answer. Concurrency and timeouts are deliberately excluded."""
+    return {"client": client.describe(), "prompt_version": prompt.version, "prompt_sha256": prompt.sha256,
+            "context_tokens": int(cfg.classify["context_tokens"])}
+
+
+def rules_settings(cfg) -> dict:
+    return {"rules_version": RULES_VERSION, "reference_kinds": list(cfg.keep["reference_kinds"])}
 
 
 def settings(cfg, client, prompt) -> dict:
-    """Everything that can change a label. Concurrency and timeouts are deliberately excluded."""
-    return {"client": client.describe(), "prompt_version": prompt.version, "prompt_sha256": prompt.sha256,
-            "context_tokens": int(cfg.classify["context_tokens"]), "rules_version": RULES_VERSION}
+    """Everything that can change a filing's labels or kept text."""
+    return {**model_settings(cfg, client, prompt), **rules_settings(cfg)}
+
+
+def _stored_answers(out: dict, inputs: dict, model_sha: str) -> list[dict] | None:
+    """Label rows of a finished result with the same inputs and model settings, or None.
+    Their model answers can be reused when only the keep rules changed."""
+    if not out["record"].is_file():
+        return None
+    try:
+        record = read_json(out["record"])
+        if (record.get("status") != "done" or record.get("stage_version") != VERSION or record.get("inputs") != inputs
+                or record.get("model_settings_sha256") != model_sha):
+            return None
+        for name in ("labels", "requests"):
+            if sha256_file(out[name]) != record["outputs"].get(out[name].name):
+                return None
+        return [json.loads(line) for line in out["labels"].read_text(encoding="utf-8").splitlines() if line]
+    except (OSError, ValueError, KeyError):
+        return None
 
 
 def _context(previous: str, limit: int, encoding) -> str:
@@ -67,10 +99,11 @@ def _kept_markdown(filing_id: str, model_tag: str, prompt_sha: str, markdown: st
     parts = [f"<!-- kept text | filing {filing_id} | model {model_tag} | prompt {prompt_sha[:12]} | "
              "original Markdown slices, verbatim; each marker gives the slice length -->\n\n"]
     for row in rows:
-        if row["final_label"] in KEPT:
+        if row["kept"]:
             text = markdown[row["start"]:row["end"]]
+            why = row["final_label"] if row["kept_reason"] == "label" else f"{row['final_label']}, kept: {row['kept_detail']}"
             parts.append(f"<!-- chunk {row['chunk_id']} | {' > '.join(row['heading_path'])} | "
-                         f"chars {row['start']}-{row['end']} | length {len(text)} | {row['final_label']} -->\n")
+                         f"chars {row['start']}-{row['end']} | length {len(text)} | {why} -->\n")
             parts.append(text + "\n\n")
     return "".join(parts)
 
@@ -105,6 +138,7 @@ def classify_filing(cfg, db, filing, client, prompt, chunks: list[dict], markdow
         final_label, kept_by = decide(parsed)
         rows.append({
             "filing_id": filing.filing_id, "chunk_id": chunk["chunk_id"], "section_id": chunk["section_id"],
+            "section_ids": chunk.get("section_ids") or [chunk["section_id"]], "document": chunk.get("document"),
             "heading_path": chunk["heading_path"], "item": chunk["item"], "start": chunk["start"], "end": chunk["end"],
             "tokens": chunk["tokens"], "kind": chunk["kind"],
             "model_label": parsed["label"] if parsed else None, "final_label": final_label, "kept_by": kept_by,
@@ -118,6 +152,7 @@ def classify_filing(cfg, db, filing, client, prompt, chunks: list[dict], markdow
 def run(cfg, db, filings: list, client, force: bool = False, run_id: int | None = None, log=print) -> dict:
     prompt = prompts.load(cfg.classify["prompts_dir"], cfg.classify["prompt_version"])
     current_settings = settings(cfg, client, prompt)
+    model_sha = settings_sha256(model_settings(cfg, client, prompt))
     counts: Counter = Counter()
     problems = []
     stopped = False
@@ -144,32 +179,39 @@ def run(cfg, db, filings: list, client, force: bool = False, run_id: int | None 
                                 finished=now(), tokens_in=summary["tokens_total"], tokens_kept=summary["tokens_kept"])
                 counts["already_done"] += 1
                 continue
+            stored = None if force else _stored_answers(out, inputs, model_sha)
             out["record"].unlink(missing_ok=True)  # until the new record exists, the filing is not done
             state.set_stage(db, filing.filing_id, STAGE, "running", model_tag=client.tag, started=started)
             db.commit()
-            log(f"[{index}/{len(filings)}] classify {filing.filing_id}")
             markdown = segment_stage.read_markdown(filing.markdown_path)
-            chunks = segment_stage.load_chunks(segments)
-            rows, request_rows = classify_filing(cfg, db, filing, client, prompt, chunks, markdown, run_id, log)
-            labels = Counter(r["final_label"] for r in rows)
-            tokens_total = sum(r["tokens"] for r in rows)
-            tokens_kept = sum(r["tokens"] for r in rows if r["final_label"] in KEPT)
-            summary = {
-                "filing_id": filing.filing_id, "model_tag": client.tag, "prompt_sha256": prompt.sha256,
-                "chunks": len(rows), "final_labels": dict(labels),
-                "model_labels": dict(Counter(r["model_label"] or "none" for r in rows)),
-                "failures": sum(r["kept_by"] == "failure" for r in rows), "requests": len(request_rows),
-                "tokens_total": tokens_total, "tokens_kept": tokens_kept,
-                "kept_share": round(tokens_kept / tokens_total, 4) if tokens_total else None,
-                "elapsed_seconds": round(time.perf_counter() - clock, 2),
-                "note": "Token counts are o200k_base text tokens of the Markdown slices, not billing measurements."}
+            sections_file = segment_stage.sections_path(cfg, filing)
+            if not sections_file.is_file():
+                raise FileNotFoundError(f"{sections_file.name} missing; run `segment --force` for this filing")
+            sections = read_json(sections_file)
+            if stored is not None:
+                log(f"[{index}/{len(filings)}] classify {filing.filing_id}: keep rules changed, model answers reused")
+                rows, request_rows = stored, None
+            else:
+                log(f"[{index}/{len(filings)}] classify {filing.filing_id}")
+                chunks = segment_stage.load_chunks(segments)
+                rows, request_rows = classify_filing(cfg, db, filing, client, prompt, chunks, markdown, run_id, log)
+            references = apply_keep_rules(rows, sections["sections"], markdown, cfg.keep["reference_kinds"])
+            summary = reports.filing_summary(filing, rows, references, sections["quality"])
+            summary.update({"model_tag": client.tag, "prompt_sha256": prompt.sha256, "rules_version": RULES_VERSION,
+                            "model_answers_reused": stored is not None,
+                            "requests": None if request_rows is None else len(request_rows),
+                            "elapsed_seconds": round(time.perf_counter() - clock, 2)})
             atomic_text(out["labels"], "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
-            atomic_text(out["requests"], "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in request_rows))
+            if request_rows is not None:  # reused answers keep their request log
+                atomic_text(out["requests"], "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in request_rows))
+            atomic_text(out["references"], "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in references))
             atomic_text(out["kept"], _kept_markdown(filing.filing_id, client.tag, prompt.sha256, markdown, rows))
             write_json(out["summary"], summary)
             write_record(out["record"], stage=STAGE, stage_version=VERSION, filing_id=filing.filing_id,
                          inputs=inputs, settings=current_settings,
-                         outputs=[out["labels"], out["requests"], out["kept"], out["summary"]], started=started)
+                         outputs=[out["labels"], out["requests"], out["references"], out["kept"], out["summary"]],
+                         started=started, extra={"model_settings_sha256": model_sha})
+            tokens_total, tokens_kept = summary["tokens_total"], summary["tokens_kept"]
             note = f"{summary['failures']} chunks failed and were kept as UNCERTAIN" if summary["failures"] else None
             state.set_stage(db, filing.filing_id, STAGE, "done", model_tag=client.tag, started=started,
                             finished=now(), tokens_in=tokens_total, tokens_kept=tokens_kept, error=note)
@@ -185,4 +227,5 @@ def run(cfg, db, filings: list, client, force: bool = False, run_id: int | None 
     result = {"stage_version": VERSION, "model_tag": client.tag, "settings": current_settings,
               "filings": len(filings), "counts": dict(counts), "failures": problems, "stopped": stopped}
     write_json(cfg.outputs_dir / STAGE / client.tag / "classification_run.json", result)
+    reports.write_filter_report(cfg, client.tag, log)
     return result
