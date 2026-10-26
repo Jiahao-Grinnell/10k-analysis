@@ -13,7 +13,8 @@ from pipeline.segment.chunks import build_chunks
 from pipeline.segment.structure import analyze
 
 STAGE = "segment"
-VERSION = "segment-3"  # 2: Part/Item/Note/subsection structure; 3: stricter fixed-width subsection headings
+VERSION = "segment-4"  # 2: Part/Item/Note/subsection structure; 3: stricter fixed-width subsection headings;
+                       # 4: "Item 8 of this Form 10-K ..." (prose cut by a page break) is not an Item heading
 
 
 def settings(cfg) -> dict:

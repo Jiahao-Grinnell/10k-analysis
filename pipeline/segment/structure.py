@@ -22,7 +22,8 @@ TAG = re.compile(r"<[^>]+>")
 ESCAPE = re.compile(r"\\(.)")
 SPACE = re.compile(r"\s+")
 ITEM = re.compile(r"^items?\s*(\d{1,2})\s*([a-c])?(?![\d])\s*(?:(?:,|and|&|through|-|–|—)\s*(?:items?\s*)?\d{1,2}[a-c]?\s*)*"
-                  r"(?P<sep>[.:\-–—)]|\s{2,}|$|\s+(?=[A-Z(\[\"“']))", re.I)
+                  r"(?P<sep>[.:\-–—)]|\s{2,}|$|\s+(?=(?-i:[A-Z(\[\"“'])))", re.I)  # a title starts with a real capital:
+                                                                                  # "Item 8 of this Form 10-K" is prose
 PART = re.compile(r"^part\s+(iv|i{1,3})\b\s*(?:[.:\-–—]\s*.*|\s+[A-Z].*)?$", re.I)
 NOTE_WORD = re.compile(r"^note\s+(\d{1,2})\b\s*(?:[.:\-–—)]|\s|$)", re.I)
 SUBSECTION_MAX_CHARS = 100

@@ -122,3 +122,19 @@ def test_chunks_never_cross_item_or_note_but_share_small_subsections():
     for chunk in chunks:
         first = sections_by_id[chunk.section_id]
         assert first.start <= chunk.start < first.end
+
+
+def test_sentence_cut_by_a_page_break_is_not_an_item_heading():
+    # Apple 2004 / 2008 (user report, 2026-10-26): a page break leaves "Item 8 of this Form 10-K ..."
+    # as its own short paragraph before Item 7; it must not hide the real Item 8 heading.
+    text = (f"PART I\n\nItem 1. Business\n\n{BODY}\n\nItem 2. Properties\n\n{BODY}\n\n"
+            f"Item 3. Legal Proceedings\n\n{BODY}\n\nPART II\n\nItem 5. Market\n\n{BODY}\n\n"
+            f"Item 6. Selected Financial Data\n\n{BODY} should be read with the statements in Part II,\n\n22\n\n"
+            f"Item 8 of this Form 10-K in order to understand the comparability of the data.\n\n{BODY}\n\n"
+            f"Item 7. Management's Discussion and Analysis\n\n{BODY}\n\n"
+            f"Item 7A. Market Risk\n\n{BODY}\n\nItem 8. Financial Statements and Supplementary Data\n\n{BODY}\n\n"
+            f"Item 9. Changes in Accountants\n\n{BODY}\n")
+    assert [k for k, _ in items(text)] == ["1", "2", "3", "5", "6", "7", "7A", "8", "9"]
+    assert dict(items(text))["8"] == at(text, "Item 8. Financial")
+    # headings without a period still count when a capitalised title follows
+    assert [k for k, _ in items(text.replace("Item 9. Changes", "Item 9 Changes"))][-1] == "9"

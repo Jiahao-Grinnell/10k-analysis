@@ -521,4 +521,13 @@ The tasks below replace the earlier TASK-03 to TASK-08.
 ---
 
 ## Fast Lane changes
-(none yet)
+
+### 2026-10-26 — Segmentation bug: a sentence cut by a page break hid a real Item heading (user report)
+- **Found by:** the TASK-07 alert list (Apple 2004: Item 8 not found; Apple 2008: Item 7 not found). The user saw Notes 11–13 listed under Item 7A in the monitor.
+- **Cause:** a page break left "Item 8 of this Form 10-K in order to …" as its own short paragraph before Item 7. The Item heading pattern accepts "Item N" + space + a capitalised title, but the whole pattern was case-insensitive, so the lowercase "of" also passed. That earlier false Item 8 then blocked the real one (Items must increase).
+- **Fix:** `pipeline/segment/structure.py`: the title after "Item N " must start with a real capital letter. `segment` stage version → `segment-4`.
+- **Checks:**
+  - New test `test_segment_items.py::test_sentence_cut_by_a_page_break_is_not_an_item_heading` failed before the fix and passes after it. `pytest -q`: 123 passed; the 8 user-confirmed reference lists are unchanged.
+  - Read-only comparison of all 2,894 filings before/after: 9 filings change, all only gain Items that were missed: Apple 2004 (Item 8), Apple 2008 (Item 7), HCA 1993/1998/1999/2000 (Items 11–14), Oracle 2001 (Items 11–14), UnitedHealth 2006 (Item 9A), Amazon 2007 (gains 7A; Item 8 moves from a footnote in MD&A to the real heading). No Item was lost; all 9 stay HIGH.
+  - `segment` on all filings: 2,894 done, 0 failures, quality unchanged (2,826 / 30 / 38). `classify --fake-model --company AAPL`: only the 2 changed filings rerun; 0 alerts.
+- **Seen, not fixed:** in Apple 2004 the converter's Markdown writes note headings as "Note 11Segment Information" (no space), so no notes are found there and "see Note 11" stays unresolved. To be discussed separately.
