@@ -279,7 +279,7 @@ The tasks below replace the earlier TASK-03 to TASK-08.
   - **Filings list and filing page:**
     - the list gets a "Structure" column (complete / partial / not found, chunk count) linking to the structure page;
     - the filing page links to it.
-- **Status:** ready for review
+- **Status:** done (approved by the user, 2026-10-26)
 - **Verification (2026-10-13):**
   - `pytest` monitor and control tests: 16 passed. The new assertions cover: one history row for an `all` command, the structure page (map, outline, chunk links, labels), 404 for unknown IDs, "not segmented yet", the structure links in the filings list, and the running-job panel.
   - Live on the real DB: `/runs`, `/structure` (Apple 1995 and Apple 2025), `/filings`, and `/` all return 200 in 0.07–0.35 s. The running re-segmentation shows as "all registered filings · Segment n/2,896".
@@ -340,9 +340,8 @@ The tasks below replace the earlier TASK-03 to TASK-08.
   - Tables are never separated from their caption, unit line or footnotes.
   - The LOW-quality share is reported by form, format and era.
 - **Tests to add:** `test_segment_items.py`, `test_segment_tables.py`, `test_segment_legacy.py`, `test_segment_real.py` (skips without the corpus).
-- **Status:** ready for review, with two open items:
-  1. The external-sample checks wait for companies outside the first 100 to be added to `10K_Filings/`.
-  2. The user should confirm the 8 reference lists in `tests/expected/`.
+- **Status:** done (approved by the user, 2026-10-26; the 8 reference lists in `tests/expected/` are confirmed). One check is deferred:
+  - The 8 external-filing reference lists wait for companies outside the first 100 to be added to `10K_Filings/`; they will be added then (at the latest with the external sample in TASK-11).
 - **Verification (2026-10-12):**
   - `pytest -q`: 104 passed. There are 19 new tests:
     - `test_segment_items.py` covers: a TOC table, a paragraph TOC with page numbers, "see Item 7" in prose, "Continued" page headers, spacer-row heading tables, a minimal-HTML body with `<br>` headings, notes ("NOTE 1" + title, "Note 2 –", "3. Title"), Items 7/8 for 10-KSB, EX-13 notes, the UNSTRUCTURED fallback, and chunks never crossing an Item or Note.

@@ -1,7 +1,7 @@
 {
  "filing_id": "AAPL_Apple_Inc_CIK0000320193/1996_1996-12-19_0000320193-96-000023",
  "why": "legacy fixed-width, <=2000, prose cross-references",
- "review": "checked by the assistant against the Markdown on 2026-10-12; awaiting user confirmation",
+ "review": "checked by the assistant against the Markdown on 2026-10-12; confirmed by the user on 2026-10-26",
  "quality": "HIGH",
  "headings": [
   [

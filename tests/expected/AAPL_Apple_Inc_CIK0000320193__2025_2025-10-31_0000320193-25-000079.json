@@ -1,7 +1,7 @@
 {
  "filing_id": "AAPL_Apple_Inc_CIK0000320193/2025_2025-10-31_0000320193-25-000079",
  "why": "inline XBRL, 2019+, TOC table, 'Note N –' notes",
- "review": "checked by the assistant against the Markdown on 2026-10-12; awaiting user confirmation",
+ "review": "checked by the assistant against the Markdown on 2026-10-12; confirmed by the user on 2026-10-26",
  "quality": "HIGH",
  "headings": [
   [
