@@ -30,6 +30,9 @@
 {% for r in p.interrupted %}<tr><td>{{ filing_link(r.filing_id) }}</td><td>{{ r.stage }}{% if r.model_tag %} [{{ r.model_tag }}]{% endif %}</td><td class="muted">{{ r.started }}</td></tr>
 {% else %}<tr><td colspan="3" class="muted">None.</td></tr>{% endfor %}</table>
 
-<h2>Compaction fallbacks</h2>
-<p class="muted">Available once compaction exists (TASK-08).</p>
+<h2>Compaction fallbacks <span class="muted">({{ p.compaction_fallbacks | length }})</span></h2>
+<p class="muted">These filings failed a compaction check, so their clean file uses the uncompacted kept text.</p>
+<table><tr><th>Filing</th><th>Model</th><th>Reason</th></tr>
+{% for r in p.compaction_fallbacks %}<tr><td>{{ filing_link(r.filing_id) }}</td><td>{{ r.model_tag }}</td><td>{{ r.error }}</td></tr>
+{% else %}<tr><td colspan="3" class="muted">None.</td></tr>{% endfor %}</table>
 {% endblock %}

@@ -42,7 +42,7 @@ def stage_counts(db) -> dict:
 
 
 def token_totals(db) -> list[dict]:
-    """Weighted totals per step. Kept = KEEP + UNCERTAIN chunks; clean files come with TASK-08."""
+    """Weighted totals per step. Kept = chunks kept by the filter's keep rules; clean = published clean files."""
     base = db.execute("SELECT COUNT(*) n, COALESCE(SUM(raw_tokens), 0) raw, COALESCE(SUM(markdown_tokens), 0) md "
                       "FROM filings WHERE conversion_status IN ('CHECKED_TEXT', 'REVIEW_REQUIRED')").fetchone()
     steps = [{"step": "raw files (converted filings)", "filings": base["n"], "tokens": base["raw"]},
@@ -52,6 +52,12 @@ def token_totals(db) -> list[dict]:
         share = row["kept"] / row["t_in"] if row["t_in"] else None
         steps.append({"step": f"kept by filter [{row['model_tag']}]", "filings": row["n"], "tokens": row["kept"],
                       "note": f"{share:.1%} of these filings' Markdown" if share is not None else ""})
+    for row in db.execute("SELECT s.model_tag, COUNT(*) n, COALESCE(SUM(s.tokens_kept), 0) clean, "
+                          "COALESCE(SUM(f.markdown_tokens), 0) md FROM stage_status s JOIN filings f USING (filing_id) "
+                          "WHERE s.stage='publish' AND s.status='done' GROUP BY s.model_tag ORDER BY s.model_tag"):
+        share = row["clean"] / row["md"] if row["md"] else None
+        steps.append({"step": f"clean files for scheduled tasks [{row['model_tag']}]", "filings": row["n"],
+                      "tokens": row["clean"], "note": f"{share:.1%} of these filings' Markdown" if share is not None else ""})
     return steps
 
 
@@ -67,7 +73,7 @@ def run_progress(db, run: dict | None) -> dict | None:
     info = dict(run)
     progress = db.execute("SELECT * FROM progress WHERE run_id=?", (run["run_id"],)).fetchone()
     info["chunk"] = dict(progress) if progress else None
-    if stage in {"convert", "segment", "classify"}:
+    if stage in {"convert", "segment", "classify", "compact", "publish"}:
         sql = "SELECT COUNT(*) FROM stage_status WHERE stage=? AND model_tag=? AND finished >= ? AND status != 'running'"
         params = [stage, run.get("model_tag") or "", run["started"]]
         if run["finished"]:
@@ -181,6 +187,7 @@ def _inside(path: Path, root: Path) -> bool:
 def filing_detail(cfg, db, filing_id: str, model: str | None = None) -> dict | None:
     from pipeline.classify import stage as classify_stage
     from pipeline.segment import stage as segment_stage
+    from pipeline import publish
 
     row = db.execute("SELECT * FROM filings WHERE filing_id=?", (filing_id,)).fetchone()
     if row is None:
@@ -202,9 +209,29 @@ def filing_detail(cfg, db, filing_id: str, model: str | None = None) -> dict | N
         chunk["label"] = labels.get(chunk["chunk_id"])
     tokens = [("raw file", row["raw_tokens"]), ("Markdown", row["markdown_tokens"]),
               (f"kept by filter [{model}]" if model else "kept by filter", summary["tokens_kept"] if summary else None),
-              ("clean file (TASK-08)", None)]
+              ("clean file", next((s["tokens_kept"] for s in stages if s["stage"] == "publish" and s["model_tag"] == model
+                                   and s["status"] == "done"), None))]
+    clean = publish.output_paths(cfg, model, filing)["clean"] if model else None
     return {"filing": dict(row), "stages": stages, "models": models, "model": model, "chunks": chunks,
-            "summary": summary, "tokens": tokens}
+            "summary": summary, "tokens": tokens, "has_clean": bool(clean and clean.is_file())}
+
+
+def clean_file(cfg, db, filing_id: str, model: str | None = None) -> dict | None:
+    """The published clean file of one filing for one model tag."""
+    from pipeline import publish
+    row = db.execute("SELECT * FROM filings WHERE filing_id=?", (filing_id,)).fetchone()
+    if row is None:
+        return None
+    models = [r["model_tag"] for r in db.execute(
+        "SELECT model_tag FROM stage_status WHERE filing_id=? AND stage='publish' AND status='done'", (filing_id,))]
+    model = model if model in models else (models[0] if models else None)
+    if model is None:
+        return {"filing_id": filing_id, "model": None, "models": [], "text": None}
+    path = publish.output_paths(cfg, model, corpus._from_row(cfg, row))["clean"]
+    if not (path.is_file() and _inside(path, cfg.outputs_dir)):
+        return {"filing_id": filing_id, "model": model, "models": models, "text": None}
+    return {"filing_id": filing_id, "model": model, "models": models, "text": path.read_bytes().decode("utf-8"),
+            "path": str(path)}
 
 
 def chunk_text(cfg, db, filing_id: str, chunk_id: str, model: str | None = None) -> dict | None:
@@ -233,14 +260,16 @@ def problems(db, limit: int = 500) -> dict:
                           "AND tokens_kept = 0 AND tokens_in > 0 ORDER BY filing_id"),
         "interrupted": q("SELECT s.filing_id, s.stage, s.model_tag, s.started FROM stage_status s WHERE s.status='running' "
                          "ORDER BY s.started"),
-        "compaction_fallbacks": None,  # available with TASK-08
+        "compaction_fallbacks": q("SELECT filing_id, model_tag, error FROM stage_status WHERE stage='compact' "
+                                  "AND status='done' AND error IS NOT NULL ORDER BY filing_id"),
     }
 
 
 # ---- runs grouped into jobs --------------------------------------------------------------
 
-STEP_ORDER = ["scan", "convert", "segment", "classify"]
-STEP_NAMES = {"scan": "Scan", "convert": "Convert", "segment": "Segment", "classify": "Filter"}
+STEP_ORDER = ["scan", "convert", "segment", "classify", "compact", "publish"]
+STEP_NAMES = {"scan": "Scan", "convert": "Convert", "segment": "Segment", "classify": "Filter",
+              "compact": "Compact", "publish": "Publish"}
 
 
 def local_time(stamp: str | None) -> str:

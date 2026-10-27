@@ -35,5 +35,26 @@ def reindex_records(cfg, db) -> dict:
                                 tokens_in=summary.get("tokens_total"), tokens_kept=summary.get("tokens_kept"),
                                 error=value.get("error"))
                 counts[f"classify [{model_dir.name}]"] += 1
+    from pipeline.compact.stage import _detail
+    for stage, folder in (("compact", "compact"), ("publish", "clean")):
+        root = cfg.outputs_dir / folder
+        if not root.is_dir():
+            continue
+        for model_dir in (p for p in root.iterdir() if p.is_dir()):
+            for record in model_dir.rglob("*.record.json"):
+                value = read_json(record)
+                if stage == "compact":
+                    summary_path = record.with_name(record.name.replace(".record.json", ".summary.json"))
+                    summary = read_json(summary_path) if summary_path.is_file() else {}
+                    tokens_in, tokens_out = summary.get("tokens_kept_text"), summary.get("tokens_body")
+                    detail = _detail(summary) if summary else None
+                    error = summary.get("reason") if summary.get("compaction") == "fallback" else value.get("error")
+                else:
+                    tokens_in, tokens_out = value.get("tokens_kept_text"), value.get("tokens_clean")
+                    detail, error = value.get("detail"), value.get("error")
+                state.set_stage(db, value["filing_id"], stage, value.get("status", "failed"), model_tag=model_dir.name,
+                                started=value.get("started"), finished=value.get("finished"), tokens_in=tokens_in,
+                                tokens_kept=tokens_out, error=error, detail=detail)
+                counts[f"{stage} [{model_dir.name}]"] += 1
     db.commit()
     return dict(counts)

@@ -96,6 +96,55 @@ def cmd_classify(cfg, args, client=None) -> int:
     return code
 
 
+def _model_tag(cfg, args) -> str:
+    """Whose filter results compact/publish work on: the fake model or the configured local model."""
+    if getattr(args, "fake_model", False) or cfg.classify["backend"] == "fake":
+        return "fake"
+    if not cfg.classify["model_tag"]:
+        raise SystemExit("No local model configured: set [classify] model_tag in config.toml, "
+                         "or use --fake-model to work on the fake model's results.")
+    return cfg.classify["model_tag"]
+
+
+def cmd_compact(cfg, args, model_tag: str | None = None) -> int:
+    from pipeline.compact import stage as compact_stage
+    filings = _selected(cfg, args)
+    model_tag = model_tag or _model_tag(cfg, args)
+    if getattr(args, "profile", False):
+        with closing(state.connect(cfg.db_path)) as db:
+            report = compact_stage.profile(cfg, db, filings, model_tag, sample=args.sample)
+        print(f"compact --profile [{model_tag}]: {report['filings']} filings; tokens saved by each rule alone:")
+        for fmt, info in report["by_format"].items():
+            saved = ", ".join(f"{k} {v['share']:.1%}" for k, v in info["saved"].items() if v["share"] is not None)
+            print(f"  {fmt} ({info['filings']} filings, {info['uncompacted_tokens']:,} tokens): {saved}")
+        print(f"  validation failures per variant: {report['validation_failures']}")
+        return 0
+    with closing(state.connect(cfg.db_path)) as db:
+        run_id = state.start_run(db, "compact", _args(args), planned=len(filings), model_tag=model_tag,
+                                 job_id=getattr(args, "_job_id", None))
+        print(f"compact: {len(filings)} filings [{model_tag}], rules {compact_stage.enabled_rules(cfg)}", flush=True)
+        result = compact_stage.run(cfg, db, filings, model_tag, force=args.force)
+        code = control.EXIT_STOPPED if result["stopped"] else 1 if result["failures"] else 0
+        state.finish_run(db, run_id, code)
+    print(f"compact [{model_tag}]: {result['counts']}")
+    return code
+
+
+def cmd_publish(cfg, args, model_tag: str | None = None) -> int:
+    from pipeline import publish
+    filings = _selected(cfg, args)
+    model_tag = model_tag or _model_tag(cfg, args)
+    with closing(state.connect(cfg.db_path)) as db:
+        run_id = state.start_run(db, "publish", _args(args), planned=len(filings), model_tag=model_tag,
+                                 job_id=getattr(args, "_job_id", None))
+        print(f"publish: {len(filings)} filings [{model_tag}]", flush=True)
+        result = publish.run(cfg, db, filings, model_tag, force=args.force)
+        code = control.EXIT_STOPPED if result["stopped"] else 1 if result["failures"] else 0
+        state.finish_run(db, run_id, code)
+    print(f"publish [{model_tag}]: {result['counts']}")
+    return code
+
+
 def cmd_all(cfg, args) -> int:
     from pipeline.classify import client as clients
     client = clients.from_config(cfg, fake=args.fake_model, fake_delay=args.fake_delay)  # fail early if no model is configured
@@ -105,7 +154,8 @@ def cmd_all(cfg, args) -> int:
     try:
         cmd_scan(cfg, args)  # pick up filings added to 10K_Filings/ since the last scan
         codes = []
-        for step in (cmd_convert, cmd_segment, lambda c, a: cmd_classify(c, a, client)):
+        for step in (cmd_convert, cmd_segment, lambda c, a: cmd_classify(c, a, client),
+                     lambda c, a: cmd_compact(c, a, client.tag), lambda c, a: cmd_publish(c, a, client.tag)):
             codes.append(step(cfg, args))
             if codes[-1] == control.EXIT_STOPPED:  # stop requested: do not start the next stage
                 print("Stopped on request; run the same command again to continue.")
@@ -179,7 +229,9 @@ def main(argv: list[str] | None = None) -> int:
     segment.add_argument("--force", action="store_true", help="Redo filings that are already done")
     segment.set_defaults(func=cmd_segment)
     for name, func, text in [("classify", cmd_classify, "Label every chunk with the local model"),
-                             ("all", cmd_all, "convert + segment + classify for the selected filings")]:
+                             ("compact", cmd_compact, "Compact the kept text (validated; falls back to the original)"),
+                             ("publish", cmd_publish, "Write clean files, maps and the work list for scheduled tasks"),
+                             ("all", cmd_all, "convert + segment + classify + compact + publish for the selected filings")]:
         command = sub.add_parser(name, help=text)
         _filters(command)
         command.add_argument("--force", action="store_true", help="Redo filings that are already done")
@@ -187,11 +239,15 @@ def main(argv: list[str] | None = None) -> int:
                              help="Use the test stand-in instead of a local model (labels everything UNCERTAIN)")
         command.add_argument("--fake-delay", type=float, default=0.0,
                              help="Seconds per fake request, to watch progress in the monitor")
+        if name == "compact":
+            command.add_argument("--profile", action="store_true",
+                                 help="Measure what each compaction rule saves on a sample; writes nothing else")
+            command.add_argument("--sample", type=int, default=150, help="Filings in the --profile sample")
         command.set_defaults(func=func)
     sub.add_parser("status", help="Show per-stage counts").set_defaults(func=cmd_status)
     sub.add_parser("rebuild-index", help="Recreate the status database from files").set_defaults(func=cmd_rebuild_index)
     args = parser.parse_args(argv)
     cfg = config.load(args.config)
-    if args.command in {"convert", "segment", "classify", "all"}:
+    if args.command in {"convert", "segment", "classify", "compact", "publish", "all"}:
         control.clear_stop(cfg)  # a stop request applies only to the run that was active when it was made
     return args.func(cfg, args)

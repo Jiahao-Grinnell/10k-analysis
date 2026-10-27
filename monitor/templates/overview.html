@@ -31,6 +31,5 @@
   {% for s in o.tokens %}
   <tr><td>{{ s.step }}</td><td class="num">{{ s.filings | n }}</td><td class="num">{{ s.tokens | n }}</td><td class="muted">{{ s.note }}</td></tr>
   {% endfor %}
-  <tr><td>clean files for scheduled tasks</td><td class="num">–</td><td class="num">–</td><td class="muted">available with TASK-08</td></tr>
 </table>
 {% endblock %}

@@ -7,7 +7,7 @@
 {% else %}<p class="muted">Nothing is running. <a href="/control">Start processing</a></p>{% endif %}
 
 <h2>History</h2>
-<p class="muted">One row per action: pressing Start (or running <code>pipeline all</code>) runs four steps — scan, convert, segment, filter. Click a row for the details of each step.</p>
+<p class="muted">One row per action: pressing Start (or running <code>pipeline all</code>) runs six steps — scan, convert, segment, filter, compact, publish. Click a row for the details of each step.</p>
 <table class="jobs">
   <tr><th>#</th><th>Started</th><th>What was processed</th><th>Steps</th><th>Result</th><th class="num">Duration</th></tr>
   {% for job in jobs %}

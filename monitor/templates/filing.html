@@ -3,7 +3,8 @@
 {% block body %}
 {% set f = d.filing %}
 <h1>{{ f.filing_id }}</h1>
-<p><a class="pill" href="/structure?id={{ f.filing_id | urlencode }}{% if d.model %}&model={{ d.model | urlencode }}{% endif %}">View structure: document map and outline →</a></p>
+<p><a class="pill" href="/structure?id={{ f.filing_id | urlencode }}{% if d.model %}&model={{ d.model | urlencode }}{% endif %}">View structure: document map and outline →</a>
+{% if d.has_clean %} <a class="pill" href="/clean?id={{ f.filing_id | urlencode }}&model={{ d.model | urlencode }}">View clean file for scheduled tasks →</a>{% endif %}</p>
 <div class="grid">
   <div class="card"><div class="k">Company</div><div>{{ f.ticker }} · {{ f.company_dir }}</div><div class="muted">CIK {{ f.cik or '–' }}</div></div>
   <div class="card"><div class="k">Form / period</div><div>{{ f.form }}{% if f.is_amendment %} <span class="pill warn">amendment</span>{% endif %} · {{ f.period or f.year }}</div>

@@ -22,6 +22,9 @@ CLASSIFY_DEFAULTS = {
 KEEP_DEFAULTS = {
     "reference_kinds": ["note", "item", "exhibit"],  # cross-reference targets that are kept (rules.py)
 }
+COMPACT_DEFAULTS = {
+    "rules": [],  # compaction rules to apply (pipeline/compact/rules.py); chosen with `compact --profile`
+}
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,7 @@ class Config:
     min_free_gb: float
     classify: dict
     keep: dict
+    compact: dict
     data: dict
 
     @property
@@ -65,5 +69,6 @@ def load(path: Path | str | None = None) -> Config:
         classify={**CLASSIFY_DEFAULTS, **data.get("classify", {}),
                   "prompts_dir": str((base / data.get("classify", {}).get("prompts_dir", "prompts")).resolve())},
         keep={**KEEP_DEFAULTS, **data.get("keep", {})},
+        compact={**COMPACT_DEFAULTS, **data.get("compact", {})},
         data=data,
     )

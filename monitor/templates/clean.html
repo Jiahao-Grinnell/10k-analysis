@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Clean file · {{ c.filing_id }}{% endblock %}
+{% block body %}
+<p><a href="/filing?id={{ c.filing_id | urlencode }}{% if c.model %}&model={{ c.model | urlencode }}{% endif %}">← {{ c.filing_id }}</a></p>
+<h1>Clean file <span class="muted">{{ c.filing_id }}</span></h1>
+{% if c.models | length > 1 %}
+<p>Model: {% for m in c.models %}<a class="pill" href="/clean?id={{ c.filing_id | urlencode }}&model={{ m | urlencode }}">{{ m }}{{ ' ✓' if m == c.model }}</a>{% endfor %}</p>
+{% endif %}
+{% if c.text is none %}<p class="muted">No clean file has been published for this filing yet.</p>
+{% else %}<p class="muted">{{ c.path }} · exactly what the scheduled task reads</p>
+<pre class="text">{{ c.text }}</pre>{% endif %}
+{% endblock %}

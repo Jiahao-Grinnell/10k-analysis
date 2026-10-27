@@ -11,11 +11,11 @@
   <div class="pipeline">
     {% set by_name = {} %}
     {% for s in job.steps %}{% set _ = by_name.update({s.command: s}) %}{% endfor %}
-    {% for step in ['scan', 'convert', 'segment', 'classify'] %}
+    {% for step in ['scan', 'convert', 'segment', 'classify', 'compact', 'publish'] %}
       {% set s = by_name.get(step) %}
       {% set state = 'todo' if not s else ('active' if s.state == 'running' else ('done' if s.finished else 'stale')) %}
       <div class="step {{ state }}">
-        <div class="step-name">{{ {'scan':'1 · Scan','convert':'2 · Convert','segment':'3 · Segment','classify':'4 · Filter (model)'}[step] }}</div>
+        <div class="step-name">{{ {'scan':'1 · Scan','convert':'2 · Convert','segment':'3 · Segment','classify':'4 · Filter (model)','compact':'5 · Compact','publish':'6 · Publish'}[step] }}</div>
         {% if s and s.planned %}
           <div class="step-count">{{ s.completed | n }} / {{ s.planned | n }} filings</div>
           <div class="bar"><span style="width:{{ (100 * (s.completed or 0) / s.planned) | round(1) }}%"></span></div>

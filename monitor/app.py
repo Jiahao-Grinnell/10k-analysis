@@ -95,6 +95,13 @@ def create_app(config_path: Path | str | None = None) -> Flask:
             abort(404, description="Unknown filing or chunk")
         return render_template("chunk.html", c=result)
 
+    @app.route("/clean")
+    def clean():
+        result = queries.clean_file(cfg, db(), request.args.get("id", ""), request.args.get("model"))
+        if result is None:
+            abort(404, description="Unknown filing ID")
+        return render_template("clean.html", c=result)
+
     @app.route("/problems")
     def problems():
         return render_template("problems.html", p=queries.problems(db()))

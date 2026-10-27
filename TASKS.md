@@ -441,7 +441,27 @@ The tasks below replace the earlier TASK-03 to TASK-08.
   - A filing with nothing kept says so in its header and in the index.
   - A compaction-rule change reruns compact and publish only.
 - **Tests to add:** `test_compact.py`, `test_publish.py`, `test_reports.py` (savings math).
-- **Status:** todo
+- **Status:** ready for review. The full-corpus run is not done yet: the user chose a 300-filing sample first (2026-10-27).
+- **Verification (2026-10-27):**
+  - `pytest -q`: 144 passed. New tests:
+    - `test_compact.py` (17): each rule with the cases it must leave alone (html_minify, cell_whitespace, remove_empty_wrappers, unwrap single wrappers but keep multi-paragraph cells, `$` / `%` / `)` merges and "$ Total" not merged, empty rows and columns with numbers kept under their headings, row-spanning tables kept, pipe tables only for exact grids, empty and nested tables, HTML with `<pre>` untouched, prose without touching code or fixed-width text); the check catches "12 34" → "1234", a lost sign, changed fixed-width spacing and shifted columns; a broken rule falls back to the uncompacted text; no rules → no gain; an SEC-style fixture is compacted and passes; filter results from an older classify version are not compacted.
+    - `test_publish.py` (4): header fields; every map part traces back to the Markdown (same visible tokens); nothing kept is said in the header and the index; source-incomplete and unprocessed filings are in the index; a compaction-rule change reruns compact and publish only (segment and classify `already_done`); weighted savings math.
+    - `test_monitor.py`: clean-file page, clean tokens on the overview, compaction fallbacks list.
+  - **Where tokens are** (120-filing sample of the Markdown): HTML tables 63%, prose 22%, fixed-width text 8.5%, other HTML 3.9%, pipe tables 2%.
+  - **Rule profile** (`compact --profile`, 150 filings, each rule alone; 0 validation failures for every variant): drop_empty_columns 21.8%, unwrap_cell_wrappers 16.2%, drop_empty_rows 9.9%, remove_empty_wrappers 9.8%, cell_whitespace 8.5%, merge_symbol_cells 4.9%, html_minify 4.5%, table_to_pipe 4.3%, html_whitespace 929 tokens, prose_whitespace 437 tokens; all rules 42.3%. Every rule saves tokens, so all ten are enabled in `config.toml`.
+  - **Sample run** (300 random filings, seed 20261027, plus Apple's 32; 330 filings), fake model, through the normal stage code:
+    - compact: 266 applied, 64 no gain (all fixed-width), **0 fallbacks**; publish: 330 ready; 241 single tables kept as they were by the per-table check, 1,109 row-spanning tables kept in layout.
+    - weighted tokens: raw 339.8M → Markdown 67.5M → kept 67.5M (fake model keeps everything) → clean **38.4M**. Kept → clean **−43.4%** (HTML 2001–18 −49.4%, inline XBRL −41.0%, fixed-width 0%); raw → clean −88.7%. Per filing, clean ÷ Markdown: p10 0.45, median 0.64, p90 1.01.
+    - time: compact about 1.8 s per filing (526 s for 298), publish 0.15 s.
+    - rule by rule, in run order (each after the ones before; sums to the whole saving): html_minify −2.8M, cell_whitespace −2.6M, remove_empty_wrappers −4.4M, unwrap_cell_wrappers −4.4M, merge_symbol_cells −0.56M, drop_empty_rows −3.2M, drop_empty_columns −9.8M, table_to_pipe −1.6M, html_whitespace −2K, prose_whitespace −1K.
+  - **Hidden characters** (follow-up from the TASK-07 review): 120 of the 330 clean files (36%) contain C1 control characters left by Windows-1252 text decoded as Latin-1 (0x97 em dash 33,161, 0x92 apostrophe 30,859, 0x93/0x94 quotes 11,3xx each, 0x95 bullet 7,495, …; 97,690 in all). Replacing them with the intended characters would save 89,062 tokens, 0.23% of the clean tokens. Compaction leaves them, as it must not change characters; the cost is small, so no converter change is proposed.
+  - Monitor on the real DB: overview, runs, problems, filing, clean-file and filings pages return 200 in 0.03–0.38 s.
+  - Found and fixed during the run: Apple's clean files had not been republished after a re-compaction; `publish` redid them because their compact record had changed, and the sample summary now matches the rule-by-rule total exactly (38,367,926 tokens).
+- **Decisions and notes:**
+  - See IMPLEMENTATION_PLAN §1.8 "As built in TASK-08".
+  - Compaction of a filing whose filter result was made by an older classify version waits until that filing is classified again (`classify-2`).
+  - The index is rewritten every 50 filings and at the end of a run, not after every filing.
+  - A visual summary of the token flow is in `outputs/reports/token_flow.html` (generated, not in git).
 
 ### TASK-09 — Local model registry, download, memory check, servers
 - **Goal:** Any local model from Hugging Face can be added, downloaded, checked against the 14 GB budget and served, with no code change. This covers both the tier-1 scorer and the tier-2 instruction model.

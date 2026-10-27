@@ -137,3 +137,14 @@ def test_filing_page_says_why_a_dropped_chunk_was_kept(tmp_path):
     app.testing = True
     detail = page(app.test_client(), f"/filing?id={FILING}")
     assert "kept: section" in detail
+
+
+def test_clean_file_page_and_clean_tokens(client):
+    overview = page(client, "/")
+    assert "clean files for scheduled tasks [fake]" in overview
+    detail = page(client, f"/filing?id={FILING}")
+    assert "View clean file for scheduled tasks" in detail
+    clean = page(client, f"/clean?id={FILING}&model=fake")
+    assert f"filing_id: &#34;{FILING}&#34;" in clean or f'filing_id: "{FILING}"' in clean
+    assert "Compaction fallbacks" in page(client, "/problems")
+    page(client, "/clean?id=nope", 404)

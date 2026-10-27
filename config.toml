@@ -32,6 +32,12 @@ enable_thinking = false
 # in the same filing. Remove a kind to stop following it; only classify reruns, without model requests.
 reference_kinds = ["note", "item", "exhibit"]
 
+[compact]
+# Deterministic compaction of the kept text (pipeline/compact/rules.py). Only rules that save tokens
+# on `compact --profile` are listed. Changing this list reruns compact + publish only.
+rules = ["html_minify", "cell_whitespace", "remove_empty_wrappers", "unwrap_cell_wrappers", "html_whitespace",
+         "merge_symbol_cells", "drop_empty_rows", "drop_empty_columns", "table_to_pipe", "prose_whitespace"]
+
 [disk]
 min_free_gb = 50                 # monitor warns below this; long runs will pause (TASK-12)
 

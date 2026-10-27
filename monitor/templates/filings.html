@@ -7,7 +7,7 @@
   <input name="form" value="{{ args.form }}" placeholder="form, e.g. 10-K405" size="12">
   <select name="stage">
     <option value="">any stage</option>
-    {% for s in ['convert', 'segment', 'classify'] %}<option {{ 'selected' if args.stage == s }}>{{ s }}</option>{% endfor %}
+    {% for s in ['convert', 'segment', 'classify', 'compact', 'publish'] %}<option {{ 'selected' if args.stage == s }}>{{ s }}</option>{% endfor %}
   </select>
   <select name="status">
     <option value="">any status</option>

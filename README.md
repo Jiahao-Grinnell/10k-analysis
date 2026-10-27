@@ -24,15 +24,16 @@ It is the step **before** final extraction. It takes filings that have already b
 |---|---|
 | Incremental scan of `10K_Filings/` into a status database | done |
 | Conversion to Markdown (`convertmd.py` 1.2.0, including 10-KSB / 10-KT / amendments) | done |
-| Segmentation into lossless reading chunks | done; structural Part / Item / note segmentation is next (TASK-06) |
+| Segmentation by Part / Item / subsection / note into lossless reading chunks | done (TASK-06) |
 | Classification pipeline with a fake model (for testing) | done |
+| Keep rules (whole sections, cross-references) and filtering reports | done (TASK-07) |
 | Web monitor, with start / stop buttons | done |
-| Keep rules, compaction and clean output files | planned (TASK-07, TASK-08) |
+| Compaction and clean output files for scheduled tasks | built, in review (TASK-08) |
 | Local models, two-tier filtering, model selection, pilot at scale | planned (TASK-09 to TASK-12) |
 
 Progress and verification notes are in [TASKS.md](TASKS.md).
 
-Development corpus today: 100 companies, 2,896 filings, 588M Markdown tokens (o200k_base), and 382,553 chunks. All chunks join back to their Markdown exactly.
+Development corpus today: 100 companies, 2,896 filings, 588M Markdown tokens (o200k_base), and 470,496 chunks. All chunks join back to their Markdown exactly.
 
 ## Requirements
 
@@ -53,7 +54,7 @@ The first time `tiktoken` loads an encoding it needs network access. After that 
 $py = '.\.venv\Scripts\python.exe'
 
 & $py -m pipeline scan                                   # register filings in 10K_Filings/ (only new ones on later runs)
-& $py -m pipeline all --fake-model --company AAPL        # scan + convert + segment + classify, test model
+& $py -m pipeline all --fake-model --company AAPL        # scan + convert + segment + classify + compact + publish, test model
 & $py -m pipeline status                                 # counts per stage
 & $py -m monitor                                         # web monitor at http://127.0.0.1:5000
 ```
@@ -70,7 +71,9 @@ All commands: `& '.\.venv\Scripts\python.exe' -m pipeline <command> [options]`.
 | `convert` | Indexes existing Markdown and converts filings that have none. Existing Markdown is never rewritten. `--reconvert-changed` rebuilds Markdown only for filings whose raw file changed. |
 | `segment` | Splits each filing's Markdown into reading chunks of at most about 2,000 tokens. Every filing is checked: the chunks must join back into the Markdown byte for byte. |
 | `classify` | Labels every chunk KEEP, DROP or UNCERTAIN, one filing at a time. Failures count as UNCERTAIN and are kept. Then applies the keep rules: a section with any KEEP or UNCERTAIN chunk is kept whole, and numbered cross-references in kept text ("see Note 7", "Item 8", "Exhibit 13") keep their target in the same filing. Writes a filtering report (`filter_report.json` / `.csv`, `filter_alerts.csv`, `unresolved_references.csv` in `outputs/classify/<model>/`). When only the keep rules change, the stored model answers are reused and no request is sent. |
-| `all` | `scan`, then `convert` + `segment` + `classify` for the selected filings. |
+| `compact` | Compacts each filing's kept text: removes table markup, empty cells, empty columns and rows, wasted whitespace; turns simple tables into pipe tables. Every filing is checked against the uncompacted text (words, numbers and signs, fixed-width text, table cells and alignment); on any failure, or without a saving, the uncompacted text is used and the reason recorded. `--profile` measures each rule on a sample without writing results. Rules are listed in `config.toml` `[compact] rules`. |
+| `publish` | Writes `clean.md` (short header + compacted text) and `clean.map.json` (where each part came from) per filing, plus the work list `clean_index.csv` / `.jsonl` and `clean_summary.json` (weighted token savings at each step). A filing with nothing kept says so in its header and in the index. |
+| `all` | `scan`, then `convert` + `segment` + `classify` + `compact` + `publish` for the selected filings. |
 | `status` | Counts by stage, form and conversion status; total tokens; the last run. |
 | `rebuild-index` | Recreates the status database from the files on disk. |
 
@@ -96,8 +99,9 @@ Options:
 | Overview | Per-stage counts, tokens at each step, free disk space (warning below 50 GB), the current run with progress and time left |
 | Runs | Recent runs, with speed and filings completed |
 | Filings | Search and filters (company, CIK, year, form, stage, status) |
-| Filing detail | Metadata, amendment link, stage status, tokens per step, every chunk with its label and reason; click a chunk to read its original text |
-| Problems | Missing or changed sources, failed stages, chunks kept after a model error, filings with nothing kept, interrupted filings |
+| Filing detail | Metadata, amendment link, stage status, tokens per step, every chunk with its label, reason and why it was kept; click a chunk to read its original text; link to the clean file |
+| Clean file | Exactly the text a scheduled task reads for that filing |
+| Problems | Missing or changed sources, failed stages, chunks kept after a model error, filings with nothing kept, compaction fallbacks, interrupted filings |
 | Control | Start / stop processing, and the log of the last run started from the page |
 
 ## Folders
@@ -110,6 +114,9 @@ Options:
 | `outputs/segments/<company>/<file>.segments.jsonl` + `.record.json` | Chunks with exact character ranges | no |
 | `outputs/classify/<model>/<company>/<file>.*` | `labels.jsonl`, `requests.jsonl`, `references.jsonl`, `kept.md`, `summary.json`, `record.json` | no |
 | `outputs/classify/<model>/filter_report.*`, `filter_alerts.csv`, `unresolved_references.csv` | Kept tokens per Item, reasons, reference statistics; filings whose MD&A or financial statements Item kept nothing or was not found | no |
+| `outputs/compact/<model>/<company>/<file>.*` | `body.md` (compacted kept text), `pieces.json`, `summary.json` (rules, checks, tokens), `record.json` | no |
+| `outputs/clean/<model>/<company>/<file>.clean.md` + `.clean.map.json` | **What the scheduled tasks read**, and its map back to the Markdown | no |
+| `outputs/clean/<model>/clean_index.csv` / `.jsonl`, `clean_summary.json` | Work list (one row per filing: status, paths, tokens at each step) and weighted savings | no |
 | `runs/pipeline.sqlite` | Status database (rebuildable from files) | no |
 | `config.toml` | Paths, chunk size, model settings, keep rules (`[keep] reference_kinds`), disk threshold, GPU budget | yes |
 | `prompts/` | Category definitions (from the research document), classification prompt, answer schema | yes |
@@ -195,7 +202,6 @@ If plain Markdown fails these checks, the converter falls back to minimal HTML a
 
 ## Limitations (current)
 
-- **No real model yet:** only `--fake-model` works, because no local model is configured. It keeps everything, so no tokens are saved yet beyond the Markdown conversion.
-- **No structural segmentation yet:** chunks are not yet grouped into Part / Item / note sections. Every chunk sits under one `UNSTRUCTURED` section until TASK-06.
-- **No clean output yet:** compaction and the clean files for scheduled tasks are not built yet (TASK-08).
+- **No real model yet:** only `--fake-model` works, because no local model is configured. It keeps everything, so the only savings so far come from conversion and compaction.
+- **Fixed-width (pre-2001 text) filings are not compacted:** their spacing is never touched, so their clean files are as large as their kept text.
 - **Not yet tested outside the sample:** the tool has been run only on the 100-company development sample.

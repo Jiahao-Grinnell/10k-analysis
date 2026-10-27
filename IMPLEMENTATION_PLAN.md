@@ -336,6 +336,31 @@ Body: the compacted kept sections in document order.
 
 **`clean_summary.json`:** weighted token savings for Markdown → kept, kept → clean, Markdown → clean and raw → clean, plus per-filing distribution figures.
 
+**As built in TASK-08 (`compact-1`, `compact-rules-1`, `publish-1`).** These points replace §1.7–1.8 where they differ.
+- **Where tokens are:** on a 120-filing sample, HTML tables hold 64% of all Markdown tokens, prose 22%, fixed-width text 8.5%, other HTML 4%, pipe tables 2%. The rules therefore concentrate on HTML tables.
+- **Modules:** `pipeline/compact/tables.py` (table model: cells with tag, spans, inner HTML, visible text; HTML and pipe parsing; span-aware grid; HTML / pipe rendering), `rules.py`, `validate.py`, `stage.py`; `pipeline/publish.py`.
+- **Rules** (`[compact] rules` in config.toml; each one can be switched off):
+  - `html_minify`: a table is rewritten without whitespace between tags and without presentational attributes (only `colspan` / `rowspan` stay);
+  - `cell_whitespace`: whitespace runs inside a cell become one space;
+  - `remove_empty_wrappers`: empty `<p>`, `<div>`, `<span>`, `<b>`… inside cells; a table without any text is removed;
+  - `unwrap_cell_wrappers`: a cell's single `<p>` / `<div>` / `<span>` is unwrapped; cells with several block children keep them;
+  - `merge_symbol_cells`: a `$` / `(` cell joins the number on its right, a `%` / `)` cell the number on its left;
+  - `drop_empty_rows`, `drop_empty_columns`: a column is removed when every cell covering it is empty or also covers another column (spans shrink);
+  - `table_to_pipe`: only when the grid is exact (no spans, equal row lengths, no block content in cells);
+  - `html_whitespace`: whitespace runs in other HTML become one space (tables inside large HTML blocks are compacted but stay HTML; blocks containing `<pre>` are not touched);
+  - `prose_whitespace`: runs of spaces inside a paragraph line and trailing spaces; never in paragraphs with backticks.
+  - Tables with `rowspan` keep their rows, columns and symbol cells. Nested tables, captions and other non-cell content inside a table are left as they are.
+- **Checks:** each table is checked on its own right after compaction and stays as it was if the check fails. The whole filing is then checked against the uncompacted kept text (`validate.check`): visible tokens in order (`$ % ( )` as their own tokens), numbers with signs, fixed-width blocks byte for byte, and per table the same non-empty cells per row and the same cell overlaps between rows (numbers stay under their headings). Any failure → the filing uses the uncompacted kept text; no token gain → the same.
+- **Kept text assembly:** kept chunks in document order, cut at section boundaries. A heading line `## <path to the Part / Item / note / exhibit>` is written when that unit changes or after dropped text; subsection titles are already in the text. A fixed-width block cut in the middle gets its fence closed / re-opened.
+- **Large HTML blocks:** minimal-HTML filings put the whole report in one HTML block; parts of such a block that are kept are compacted too (whole tables inside the part, whitespace).
+- **Outputs:** `outputs/compact/<model>/<company>/<file>.body.md`, `.pieces.json`, `.summary.json`, `.record.json`; `outputs/clean/<model>/<company>/<file>.clean.md`, `.clean.map.json`, `.record.json`; `outputs/clean/<model>/clean_index.csv`, `.jsonl`, `clean_summary.json`.
+- **Header:** YAML lines with JSON-encoded values: filing_id, company (from the folder name), cik, ticker, form, fiscal_year, period, filing_date, accession, is_amendment, amends, source (relative to `10K_Filings/`), conversion_quality, segmentation_quality, filter_model, kept_sections, tokens_markdown, tokens_clean, compaction, and `note` when nothing was kept.
+- **Map:** per part: section, heading path, `markdown_start/end`, `clean_start/end`, and each chunk's label, deciding step, keep reason and model reason.
+- **Index:** built from the status database (no file reads), one row per registered filing; status `ready`, `nothing_kept`, `source_incomplete`, `failed` or `pending`. It is rewritten every 50 filings and at the end of a publish run, not after every filing.
+- **Summary:** weighted savings for Markdown → kept (filter), kept → clean (compaction; base = kept text with heading lines), Markdown → clean and raw → clean, per raw format, with per-filing p10 / median / p90 of clean ÷ Markdown.
+- **CLI:** `compact [--profile --sample N]`, `publish`; `all` runs both after classify. Both work on one model tag: `--fake-model` → `fake`, otherwise `[classify] model_tag`.
+- **Monitor:** clean-file token totals on the overview, a clean-file page per filing (`/clean`), compaction fallbacks on the problems page, six steps on the runs page.
+
 ### 1.9 Streaming flow, disk guard, long runs
 - **`pipeline run`** works on the DB selection (default: everything not yet published). It uses:
   - a CPU worker that converts and segments up to `prefetch` filings ahead (default 20);
@@ -376,6 +401,7 @@ Files are the source of truth. The SQLite database is an index that can be rebui
 | `outputs/segments/<company>/<file>.segments.jsonl` + `.record.json` | Chunks and the segmentation record | no |
 | `outputs/classify/<model_tag>/<company>/<file>.*` | labels, requests, references, kept, summary, record | no |
 | `outputs/classify/<model_tag>/filter_report.*`, `filter_alerts.csv`, `unresolved_references.csv` | Filtering report over every finished filing of that model | no |
+| `outputs/compact/<model_tag>/<company>/<file>.*` | body, pieces, summary, record | no |
 | `outputs/clean/<model_tag>/<company>/<file>.clean.md`, `.clean.map.json`, `.record.json` | Published output | no |
 | `outputs/clean/<model_tag>/clean_index.csv`, `.jsonl`, `clean_summary.json` | Work list and savings for scheduled tasks | no |
 | `outputs/selection/` | Sample list, label xlsx files, evaluation reports | no (label files backed up by the user) |
